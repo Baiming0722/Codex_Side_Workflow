@@ -85,6 +85,10 @@ def extract_token_usage(raw_usage):
         v = raw_usage.get(k)
         if isinstance(v, (int, float)) and v >= 0:
             out[k] = int(v)
+    if 'cached_input_tokens' not in out:
+        alt = raw_usage.get('cache_read_input_tokens')
+        if isinstance(alt, (int, float)) and alt >= 0:
+            out['cached_input_tokens'] = int(alt)
     return out or None
 
 

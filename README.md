@@ -1,6 +1,6 @@
 # Codex 工作流監控外掛 & 多模型子代理自動配置方案
 
-> **版本：`v0.3.2`**｜適用於 **ChatGPT Desktop / Codex**（MCP Apps 側邊分頁）與 **Codex CLI**  
+> **版本：`v0.3.3`**｜適用於 **ChatGPT Desktop / Codex**（MCP Apps 側邊分頁）與 **Codex CLI**  
 > 內含兩項可獨立或合併使用的元件：
 > 1. **`codex-workflow-monitor` 本機外掛**：以終端機 TUI 數據流風格即時視覺化呈現單模型與多子代理運行狀態，預設唯讀讀取本機狀態，開箱即用。
 > 2. **四模型多子代理自動配置規格**：一份可直接交給 Codex 執行的安全配置手冊（Phase A 唯讀 Diff 預覽 → 人工批准 → Phase B 備份寫入 → Phase C 嚴格驗證），協助導入 `Sol` / `Luna` / `Terra` / `Astra` 協作架構。
@@ -43,7 +43,7 @@
 - **零侵入即開即用**：透過 Node 內建唯讀 `node:sqlite` 直接觀測 `$CODEX_HOME/state_*.sqlite`、`thread_history_*.sqlite` 與活躍執行緒的 `rollout-*.jsonl` 尾端中繼資料；同時相容合併外掛內建的選用 Hooks（`~/.codex-workflow-monitor/events.jsonl`）。
 - **完整即時指標與範圍切換**：
   - 支援頂部 **「對話（Session）／輪次（Turn）」** 統計範圍即時切換。
-  - 顯示主模型、功能模組與子代理的完成度、調用次數、工具呼叫數、即時運行時間（每秒更新）與 Token 用量。
+  - 顯示主模型、功能模組與子代理的緩存命中率、調用次數、工具呼叫數、即時運行時間（每秒更新）與整體（主代理 + 子代理）Token 總用量。
   - 自動過濾監控外掛自身的工具輪詢（`open_workflow_monitor`、`read_workflow_events`、`clear_workflow_events`），避免誤觸發光。
 
 ### 2. 安全可控的四模型多子代理協作方案（選用）
@@ -60,7 +60,7 @@
 ```text
 ┌───────────────────┐     ┌────────────────────────────────────────┐     ┌──────────────────┐
 │  ASTRA 顧問欄     │◄───►│  主模型（Sol · gpt-6.2-sol）           │────►│ RUNTIME 執行資源 │
-│  (advisor / gold) │     │  即時狀態 · 回合 · 進度 · 耗時         │     │ 完成度 · Token   │
+│  (advisor / gold) │     │  即時狀態 · 回合 · 緩存 · 耗時         │     │ 緩存命中率·總Token│
 │  · 規劃鎖定前     │     └──────────────────┬─────────────────────┘     └──────────────────┘
 │  · 連續失敗兩次   │                        ▼
 │  · 交付終審關卡   │     ┌────────────────────────────────────────┐
@@ -193,7 +193,7 @@ codex plugin add codex-workflow-monitor@codex-workflow-local
 ├── preview-zh.html                                # 獨立瀏覽器互動預覽版（免安裝可檢視三種情境）
 ├── README.md                                      # 專案總覽、安裝指南與多模型子代理自動配置規格
 └── plugins/codex-workflow-monitor/
-    ├── plugin.json                                # 外掛中繼宣告（v0.3.2）
+    ├── plugin.json                                # 外掛中繼宣告（v0.3.3）
     ├── mcp.json                                   # 使用 ${PLUGIN_ROOT} 的本機 stdio MCP 伺服器設定
     ├── package.json                               # 建置（esbuild）、語法檢查與驗證測試腳本
     ├── hooks/
@@ -542,7 +542,11 @@ Codex 多模型子代理配置報告
 
 ## 版本更新摘要
 
-- **`v0.3.2`（目前版本）**
+- **`v0.3.3`（目前版本）**
+  - 將面板與詳情抽屜中的「完成度」全面改為真實的**「緩存命中率（`cached_input_tokens / input_tokens`）」**（工具模組詳情標示為「成功率」），ASTRA 顧問刻度條亦改依緩存命中率比例點亮。
+  - **RUNTIME Token 消耗改為 Agent + Subagent 總和**（依「對話／輪次」範圍同步統計），並於懸停提示與詳情抽屜提供主代理與子代理的拆帳明細與加權緩存命中率。
+  - 強化遙測精準度與穩定性：新增 rollout 無損往回分塊掃描與 `thread_turns` byte-offset 區間定位（解決巨型輸出截尾、多子回合與 compaction 漏算）、`WITH RECURSIVE` 支援巢狀子代理、多 Advisor 實例彙總至 ASTRA 欄、消除執行中工具雙重計數與 `collaboration:*` 誤分類、修正 RUNTIME 即時跳秒與前端切換範圍輪詢競態。
+- **`v0.3.2`**
   - 完成終端機 **TUI 數據流介面**重構：保留點陣框線、動態正交數據連線與光點動畫，並新增「對話（Session）／輪次（Turn）」統計範圍切換與「精簡隱藏」模式。
   - 統一文件與外掛／多子代理角色命名對照，移除本機絕對路徑並整理為 GitHub 公開發佈版本。
 - **`v0.3.0`**

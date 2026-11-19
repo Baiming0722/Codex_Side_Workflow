@@ -562,6 +562,11 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
   gap: 8px;
   font-size: 10.5px;
 }
+.main-prog-lbl {
+  font-size: 10px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
 .main-metrics-inline {
   margin-top: 6px;
   display: flex;
@@ -719,7 +724,8 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
   background: var(--green);
   opacity: 0.78;
 }
-.tprog[data-state="failed"] > i {
+.tprog[data-state="failed"] > i,
+.tprog[data-state="interrupted"] > i {
   background: var(--red);
   opacity: 0.85;
 }
@@ -790,7 +796,8 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
   color: var(--green);
   border-color: rgba(99, 213, 160, 0.5);
 }
-.worker-box[data-state="failed"] .worker-tag {
+.worker-box[data-state="failed"] .worker-tag,
+.worker-box[data-state="interrupted"] .worker-tag {
   color: var(--red);
   border-color: rgba(255, 113, 125, 0.55);
 }
@@ -827,7 +834,7 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
 .worker-pct {
   font-size: 11px;
   font-weight: 700;
-  min-width: 34px;
+  min-width: 38px;
   text-align: right;
   color: var(--text-2);
 }
@@ -1159,7 +1166,7 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
             <div class="kv-mini"><span>調用次數</span><b id="astraCalls">0 次</b></div>
             <div class="kv-mini"><span>工具呼叫</span><b id="astraTools">0 次</b></div>
             <div class="kv-mini"><span>運行時間</span><b id="astraTime" data-live-start="0" data-base-ms="0">00:00</b></div>
-            <div class="kv-mini"><span>完成度</span><b id="astraPct">—</b></div>
+            <div class="kv-mini"><span>緩存命中率</span><b id="astraPct">—</b></div>
             <div class="tickmarks" id="astraTicks"><i></i><i></i><i></i><i></i><i></i></div>
             <div class="kv-mini"><span>狀態</span><b id="astraState">未啟用</b></div>
           </div>
@@ -1176,9 +1183,10 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
               </div>
               <div class="main-activity" id="mainActivity">[ 等待讀取本機 Codex 狀態 ]</div>
               <div>
-                <div class="main-progress-row">
+                <div class="main-progress-row" id="mainProgRow" title="主模型緩存命中率">
+                  <span class="main-prog-lbl">緩存</span>
                   <div class="tprog" id="mainProg" data-state="idle" style="--bar-color:var(--purple);--bar-glow:rgba(177,154,254,.65)"><i id="mainProgFill"></i></div>
-                  <b id="mainPct">0%</b>
+                  <b id="mainPct">—</b>
                 </div>
                 <div class="main-metrics-inline">
                   <span>調用 <b id="mainInv">0</b></span>
@@ -1191,9 +1199,9 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
             <div class="tbox usage-box" id="nodeUsage" data-accent="gold" data-illum="unused" tabindex="0" role="button" aria-label="執行狀態與資源詳情">
               <div class="usage-title"><span>RUNTIME</span><span id="usageModeTag" style="font-size:10px;color:var(--text-2)">IDLE</span></div>
               <div>
-                <div class="kv-mini"><span>完成度</span><b id="uPct">0%</b></div>
+                <div class="kv-mini"><span>緩存命中率</span><b id="uPct">—</b></div>
                 <div class="kv-mini"><span id="uCallsLabel">對話調用</span><b id="uCalls">0 次</b></div>
-                <div class="kv-mini"><span id="uTimeLabel">累計時間</span><b id="uTotalTime">00:00</b></div>
+                <div class="kv-mini"><span id="uTimeLabel">累計時間</span><b id="uTotalTime" data-live-start="0" data-base-ms="0">00:00</b></div>
                 <div class="kv-mini"><span id="uTokLabel">Token</span><b id="uTokens">—</b></div>
               </div>
               <div class="usage-pill" id="uStatusPill">待機中</div>
@@ -1318,6 +1326,29 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
     return String(v);
   }
 
+  function fmtPct(v) {
+    if (v === null || v === undefined || Number.isNaN(Number(v))) return '—';
+    const n = Math.max(0, Math.min(100, Number(v)));
+    const r = Math.round(n * 10) / 10;
+    return Number.isInteger(r) ? `${r}%` : `${r.toFixed(1)}%`;
+  }
+
+  function computePct(input, cached) {
+    const i = Number(input || 0);
+    const c = Number(cached || 0);
+    if (!(i > 0)) return null;
+    return Math.round(Math.max(0, Math.min(100, (c / i) * 100)) * 10) / 10;
+  }
+
+  function fmtCacheDetail(rate, cached, input) {
+    if (rate === null || rate === undefined) return '—';
+    const pctTxt = fmtPct(rate);
+    if (Number(input || 0) > 0) {
+      return `${pctTxt} (${fmtTok(cached)} / ${fmtTok(input)})`;
+    }
+    return pctTxt;
+  }
+
   function fmtClock(ms) {
     if (!ms) return '--:--:--';
     return new Date(ms).toLocaleTimeString('en-GB', { hour12: false });
@@ -1340,9 +1371,34 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
 
   function splitSubagents(subagents) {
     const list = Array.isArray(subagents) ? subagents : [];
-    const advisor = list.find(isAdvisorSubagent) || null;
-    const workers = list.filter(s => s !== advisor);
-    return { advisor, workers };
+    const advisors = list.filter(isAdvisorSubagent);
+    const workers = list.filter(s => !isAdvisorSubagent(s));
+    let advisor = null;
+    if (advisors.length === 1) {
+      advisor = { ...advisors[0], instance_count: 1 };
+    } else if (advisors.length > 1) {
+      const active = advisors.find(a => a.is_running) || advisors[0];
+      const totalInput = advisors.reduce((acc, a) => acc + Number(a.input_tokens || 0), 0);
+      const totalCached = advisors.reduce((acc, a) => acc + Number(a.cached_input_tokens || 0), 0);
+      const anyRunning = advisors.some(a => a.is_running);
+      const anyDone = advisors.some(a => a.state === 'done');
+      const allFailed = advisors.every(a => a.state === 'failed' || a.state === 'interrupted');
+      advisor = {
+        ...active,
+        instance_count: advisors.length,
+        is_running: anyRunning,
+        state: anyRunning ? 'running' : (allFailed ? active.state : (anyDone ? 'done' : active.state)),
+        invocations: advisors.reduce((acc, a) => acc + Number(a.invocations || 0), 0),
+        tool_calls: advisors.reduce((acc, a) => acc + Number(a.tool_calls || 0), 0),
+        elapsed_ms: advisors.reduce((acc, a) => acc + Number(a.elapsed_ms || 0), 0),
+        tokens_used: advisors.reduce((acc, a) => acc + Number(a.tokens_used || 0), 0),
+        input_tokens: totalInput,
+        cached_input_tokens: totalCached,
+        cache_hit_rate_pct: computePct(totalInput, totalCached),
+        current_turn_started_ms: anyRunning ? Number(active.current_turn_started_ms || 0) : 0,
+      };
+    }
+    return { advisor, advisors, workers };
   }
 
   // Smooth 1s timer + ASCII spinner for active running elements
@@ -1695,15 +1751,20 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
 
       const progLine = document.createElement('div');
       progLine.className = 'worker-prog-line';
+      const hasCacheRate = sub.cache_hit_rate_pct !== null && sub.cache_hit_rate_pct !== undefined;
+      progLine.title = `緩存命中率：${fmtCacheDetail(sub.cache_hit_rate_pct, sub.cached_input_tokens, sub.input_tokens)}`;
       const tprog = document.createElement('div');
       tprog.className = 'tprog';
-      tprog.dataset.state = sub.is_running ? 'running' : (sub.state === 'failed' ? 'failed' : 'done');
+      tprog.dataset.state = sub.is_running
+        ? 'running'
+        : ((sub.state === 'failed' || sub.state === 'interrupted') ? sub.state : (hasCacheRate ? 'done' : 'idle'));
       const fill = document.createElement('i');
-      fill.style.width = `${Math.max(sub.is_running ? 16 : 0, sub.completion_pct || 0)}%`;
+      const fillPct = hasCacheRate ? Math.max(0, Math.min(100, Number(sub.cache_hit_rate_pct))) : (sub.is_running ? 18 : 0);
+      fill.style.width = `${fillPct}%`;
       tprog.appendChild(fill);
       const pct = document.createElement('span');
       pct.className = 'worker-pct';
-      pct.textContent = `${sub.completion_pct || 0}%`;
+      pct.textContent = fmtPct(sub.cache_hit_rate_pct);
       progLine.append(tprog, pct);
 
       const foot = document.createElement('div');
@@ -1711,9 +1772,9 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
       const left = document.createElement('span');
       if (sub.is_running) {
         left.textContent = `${sub.invocations}次 · ${sub.tool_calls}工具`;
-      } else if (sub.state === 'failed') {
+      } else if (sub.state === 'failed' || sub.state === 'interrupted') {
         left.className = 'err';
-        left.textContent = `✕ 中止 · ${sub.invocations}次`;
+        left.textContent = `${sub.state === 'interrupted' ? '✕ 中斷' : '✕ 失敗'} · ${sub.invocations}次`;
       } else {
         left.className = 'ok';
         left.textContent = `✓ ${sub.invocations}次 · ${sub.tool_calls}工具`;
@@ -1778,34 +1839,71 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
     };
 
     const p = latestState.primary || {};
-    const { advisor } = splitSubagents(latestState.subagents || []);
+    const subs = Array.isArray(latestState.subagents) ? latestState.subagents : [];
+    const { advisor } = splitSubagents(subs);
+    const sum = latestState.summary || {};
 
     if (detailTarget.kind === 'main' || detailTarget.kind === 'usage' || detailTarget.kind === 'router' || detailTarget.kind === 'return') {
       const isTurn = (latestState.scope || activeScope) === 'turn';
+      const primaryTokens = Number(sum.primary_tokens_used ?? p.tokens_used ?? 0);
+      const subTokens = Number(sum.subagents_tokens_used ?? subs.reduce((acc, s) => acc + Number(s.tokens_used || 0), 0));
+      const totalTokensAll = Number(sum.total_tokens_used ?? (primaryTokens + subTokens));
+      const sessionTotalAll = Number(sum.session_total_tokens_used ?? p.session_tokens_used ?? 0);
+      const combinedCacheRate = sum.cache_hit_rate_pct ?? p.cache_hit_rate_pct ?? null;
+      const totalInput = Number(sum.total_input_tokens ?? p.input_tokens ?? 0);
+      const totalCached = Number(sum.total_cached_input_tokens ?? p.cached_input_tokens ?? 0);
+
       $('drawerTitle').textContent = `${p.display_name || p.model || 'Codex'} · 主工作流`;
       $('drawerDesc').textContent = p.current_phase || '';
       add('統計範圍', isTurn ? `當前輪次（第 ${p.turn_index || 1}/${p.session_turns_total || 1} 輪）` : `整個對話（共 ${p.session_turns_total || p.turns_total || 0} 輪）`);
       add('模型 ID', p.model || '—');
       add('推理強度', p.reasoning_effort || '預設');
-      add('目前狀態', p.is_running ? '運行中（發光）' : (p.state === 'done' ? '已完成（熄滅）' : '待機'));
-      add('完成度', `${p.completion_pct || 0}%`);
+      const statusTxt = p.pending_permission
+        ? '等待授權確認'
+        : (p.is_running
+            ? '運行中（發光）'
+            : (p.state === 'done'
+                ? '已完成（熄滅）'
+                : (p.state === 'failed'
+                    ? '執行失敗'
+                    : (p.state === 'interrupted' ? '已中斷' : '待機'))));
+      add('目前狀態', statusTxt);
+      add(subs.length > 0 ? '整體緩存命中率' : '緩存命中率', fmtCacheDetail(combinedCacheRate, totalCached, totalInput));
+      if (subs.length > 0) {
+        add('主代理緩存命中率', fmtCacheDetail(p.cache_hit_rate_pct, p.cached_input_tokens, p.input_tokens));
+      }
       add('回合進度', isTurn ? `第 ${p.turn_index || 1} 輪（共 ${p.session_turns_total || 1} 輪）` : `${p.turns_completed || 0} / ${p.turns_total || 0}`);
-      add(isTurn ? '本輪調用次數' : '對話調用次數', `${p.invocations || 0} 次（工具 ${p.tool_calls_total || 0} 次）`);
+      add(isTurn ? '本輪調用次數' : '對話調用次數', `${sum.total_invocations ?? p.invocations ?? 0} 次（主代理工具 ${p.tool_calls_total || 0} 次）`);
       add('本輪運行時間', fmtDur(p.current_turn_elapsed_ms || 0));
       add('對話累計時間', fmtDur(p.session_total_runtime_ms ?? p.total_runtime_ms ?? 0));
-      add(isTurn ? '本輪 Token' : '對話 Token', fmtTok(p.tokens_used));
-      if (isTurn && p.session_tokens_used) add('對話累計 Token', fmtTok(p.session_tokens_used));
+      add(isTurn ? '本輪總 Token（含子代理）' : '對話總 Token（含子代理）', fmtTok(totalTokensAll));
+      if (subs.length > 0) {
+        add('主代理 / 子代理 Token', `${fmtTok(primaryTokens)} / ${fmtTok(subTokens)}`);
+      }
+      if (isTurn && sessionTotalAll > 0) add('對話累計總 Token', fmtTok(sessionTotalAll));
       if (p.context_window_tokens) add('脈絡視窗', fmtTok(p.context_window_tokens));
       add('工作階段 ID', latestState.active_session_id || '—');
       if (latestState.active_turn_id) add('當前輪次 ID', latestState.active_turn_id);
     } else if (detailTarget.kind === 'astra') {
       $('drawerTitle').textContent = advisor ? `${advisor.name} · 顧問關卡` : 'ASTRA · 顧問關卡（未啟用）';
       $('drawerDesc').textContent = advisor ? (advisor.current_activity || '') : '目前工作階段尚未觸發 advisor 或授權審核。';
-      add('狀態', advisor ? (advisor.is_running ? '審查運行中（發光）' : (advisor.state === 'done' ? '已審核完成' : advisor.state)) : '未啟用');
+      const aStateTxt = p.pending_permission
+        ? '等待權限授權確認'
+        : (advisor
+            ? (advisor.is_running
+                ? '審查運行中（發光）'
+                : (advisor.state === 'done'
+                    ? '已審核完成'
+                    : (advisor.state === 'failed'
+                        ? '審查失敗'
+                        : (advisor.state === 'interrupted' ? '已中斷' : advisor.state))))
+            : '未啟用');
+      add('狀態', aStateTxt);
       add('模型', advisor ? `${advisor.model_display} (${advisor.reasoning_effort || 'xhigh'})` : 'gpt-6.2-astra');
+      if ((advisor?.instance_count || 0) > 1) add('顧問實例數', `${advisor.instance_count} 個`);
       add('調用次數', `${advisor?.invocations || 0} 次`);
       add('工具呼叫', `${advisor?.tool_calls || 0} 次`);
-      add('完成度', advisor ? `${advisor.completion_pct || 0}%` : '—');
+      add('緩存命中率', advisor ? fmtCacheDetail(advisor.cache_hit_rate_pct, advisor.cached_input_tokens, advisor.input_tokens) : '—');
       add('運行時間', fmtDur(advisor?.elapsed_ms || 0));
       add('Token 用量', fmtTok(advisor?.tokens_used));
     } else if (detailTarget.kind === 'cap') {
@@ -1814,7 +1912,7 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
       $('drawerTitle').textContent = `功能模組 · ${cap.label}`;
       $('drawerDesc').textContent = cap.desc || '';
       add('狀態', cap.is_running ? '執行中（發光）' : (cap.used ? '已完成（熄滅）' : '未使用'));
-      add('完成度', `${cap.completion_pct || 0}%`);
+      add('成功率', `${cap.completion_pct || 0}%`);
       add('調用次數', `${cap.count || 0} 次`);
       add('成功 / 失敗 / 進行中', `${cap.completed_count || 0} / ${cap.failed_count || 0} / ${cap.in_flight || 0}`);
       add('累計耗時', fmtCompactDur(cap.duration_ms));
@@ -1822,13 +1920,13 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
       if (cap.last_tool) add('最近工具', cap.last_tool);
       if (cap.servers?.length) add('MCP 伺服器', cap.servers.join(', '));
     } else if (detailTarget.kind === 'sub') {
-      const sub = (latestState.subagents || []).find(s => s.id === detailTarget.id);
+      const sub = subs.find(s => s.id === detailTarget.id);
       if (!sub) return;
       $('drawerTitle').textContent = `${sub.name} · ${sub.role_label || sub.role}`;
       $('drawerDesc').textContent = sub.current_activity || '';
       add('模型 / 推理', `${sub.model_display || sub.model}${sub.reasoning_effort ? ` (${sub.reasoning_effort})` : ''}`);
-      add('狀態', sub.is_running ? '運行中（發光）' : (sub.state === 'failed' ? '中止／失敗' : '已完成（熄滅）'));
-      add('完成度', `${sub.completion_pct || 0}%`);
+      add('狀態', sub.is_running ? '運行中（發光）' : (sub.state === 'failed' ? '執行失敗' : (sub.state === 'interrupted' ? '已中斷' : '已完成（熄滅）')));
+      add('緩存命中率', fmtCacheDetail(sub.cache_hit_rate_pct, sub.cached_input_tokens, sub.input_tokens));
       add('調用次數', `${sub.invocations || 0} 次（回合 ${sub.completed_turns || 0}/${sub.total_turns || 0}）`);
       add('工具呼叫', `${sub.tool_calls || 0} 次`);
       add('運行時間', fmtDur(sub.elapsed_ms || 0));
@@ -1911,14 +2009,23 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
       ? '▸ 等待權限授權審核'
       : (advisor?.is_running
           ? '▸ advisor 審查運行中'
-          : (advisor ? `▸ 已審核 · ${advisor.invocations} 次介入` : '▸ 未觸發 · 待命'));
+          : (advisor
+              ? `▸ ${advisor.state === 'failed' ? '審查失敗' : (advisor.state === 'interrupted' ? '審查中斷' : '已審核')} · ${advisor.invocations} 次介入${advisor.instance_count > 1 ? ` (${advisor.instance_count}實例)` : ''}`
+              : '▸ 未觸發 · 待命'));
     $('astraQuote').textContent = advisor
       ? `» ${advisor.current_activity || '已完成審查'}`
       : '» 尚未呼叫顧問子代理';
     $('astraCalls').textContent = `${advisor?.invocations || 0} 次`;
     $('astraTools').textContent = `${advisor?.tool_calls || 0} 次`;
-    $('astraPct').textContent = advisor ? `${advisor.completion_pct || 0}%` : '—';
-    $('astraState').textContent = p.pending_permission ? '待授權' : (advisor?.is_running ? '審查中' : (advisor ? '已審核' : '未啟用'));
+    $('astraPct').textContent = advisor ? fmtPct(advisor.cache_hit_rate_pct) : '—';
+    $('astraPct').title = advisor ? fmtCacheDetail(advisor.cache_hit_rate_pct, advisor.cached_input_tokens, advisor.input_tokens) : '';
+    $('astraState').textContent = p.pending_permission
+      ? '待授權'
+      : (advisor?.is_running
+          ? '審查中'
+          : (advisor
+              ? (advisor.state === 'failed' ? '執行失敗' : (advisor.state === 'interrupted' ? '已中斷' : '已審核'))
+              : '未啟用'));
 
     const aTime = $('astraTime');
     if (advisor?.is_running && advisor.current_turn_started_ms > 0) {
@@ -1931,7 +2038,10 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
     }
     aTime.textContent = fmtDur(advisor?.elapsed_ms || 0);
     const ticks = $('astraTicks').querySelectorAll('i');
-    const onCount = Math.min(ticks.length, advisor?.invocations || 0);
+    const aRate = advisor?.cache_hit_rate_pct;
+    const onCount = (aRate !== null && aRate !== undefined && Number(aRate) > 0)
+      ? Math.min(ticks.length, Math.max(1, Math.round((Number(aRate) / 100) * ticks.length)))
+      : 0;
     ticks.forEach((el, i) => el.classList.toggle('on', i < onCount));
 
     // 2. Top-Center Main Model Box
@@ -1954,28 +2064,37 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
     $('mainActivity').dataset.basePhase = p.is_running ? phaseClean : '';
     $('mainActivity').textContent = p.is_running ? `[ ${phaseClean} ${SPIN[spinIdx]} ]` : `[ ${phaseClean} ]`;
 
-    const pct = Math.max(0, Math.min(100, Number(p.completion_pct || 0)));
-    $('mainProg').dataset.state = p.is_running ? 'running' : (p.state === 'failed' ? 'failed' : (pct > 0 ? 'done' : 'idle'));
-    $('mainProgFill').style.width = `${pct}%`;
-    $('mainPct').textContent = `${pct}%`;
+    const mainCacheRate = p.cache_hit_rate_pct ?? null;
+    const hasMainCache = mainCacheRate !== null && mainCacheRate !== undefined;
+    const mainFillPct = hasMainCache ? Math.max(0, Math.min(100, Number(mainCacheRate))) : (p.is_running ? 18 : 0);
+    $('mainProg').dataset.state = p.is_running
+      ? 'running'
+      : ((p.state === 'failed' || p.state === 'interrupted') ? p.state : (hasMainCache ? 'done' : 'idle'));
+    $('mainProgFill').style.width = `${mainFillPct}%`;
+    $('mainPct').textContent = fmtPct(mainCacheRate);
+    $('mainProgRow').title = `主模型緩存命中率：${fmtCacheDetail(mainCacheRate, p.cached_input_tokens, p.input_tokens)}`;
     $('mainInv').textContent = `${p.invocations || 0}次`;
     $('mainTurns').textContent = isTurnScope
       ? `#${p.turn_index || 1}/${p.session_turns_total || 1}`
       : `${p.turns_completed || 0}/${p.turns_total || 0}`;
 
     const mTime = $('mainElapsed');
-    if (p.is_running && p.current_turn_started_ms > 0) {
+    const scopedMainMs = isTurnScope ? (p.current_turn_elapsed_ms || 0) : (p.total_runtime_ms || 0);
+    if (p.turns_in_progress > 0 && p.current_turn_started_ms > 0) {
+      const liveNowElapsed = Math.max(0, Date.now() - p.current_turn_started_ms);
+      const baseMs = isTurnScope ? 0 : Math.max(0, scopedMainMs - liveNowElapsed);
       mTime.dataset.liveStart = String(p.current_turn_started_ms);
-      mTime.dataset.baseMs = '0';
-      mTime.textContent = fmtDur(p.current_turn_elapsed_ms || (Date.now() - p.current_turn_started_ms));
+      mTime.dataset.baseMs = String(baseMs);
+      mTime.textContent = fmtDur(baseMs + liveNowElapsed);
     } else {
       mTime.dataset.liveStart = '0';
       mTime.dataset.baseMs = '0';
-      mTime.textContent = fmtDur(p.current_turn_elapsed_ms || p.total_runtime_ms || 0);
+      mTime.textContent = fmtDur(scopedMainMs);
     }
 
     // 3. Top-Right Usage / Runtime Gold Dashed Box
     const usageEl = $('nodeUsage');
+    const sum = payload.summary || {};
     usageEl.dataset.illum = anyRunning ? 'running' : (hasData ? 'used' : 'unused');
     $('usageModeTag').textContent = isTurnScope
       ? (anyRunning ? 'TURN·LIVE' : 'TURN')
@@ -1983,13 +2102,46 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
     $('uCallsLabel').textContent = isTurnScope ? '本輪調用' : '對話調用';
     $('uTimeLabel').textContent = isTurnScope ? '本輪耗時' : '累計時間';
     $('uTokLabel').textContent = isTurnScope ? '本輪 Token' : '對話 Token';
-    $('uPct').textContent = `${pct}%`;
-    $('uCalls').textContent = `${payload.summary?.total_invocations ?? p.invocations ?? 0} 次`;
-    $('uTotalTime').textContent = fmtDur(p.total_runtime_ms || 0);
-    $('uTokens').textContent = fmtTok(p.tokens_used);
+
+    const combinedCacheRate = sum.cache_hit_rate_pct ?? mainCacheRate;
+    $('uPct').textContent = fmtPct(combinedCacheRate);
+    $('uPct').title = fmtCacheDetail(
+      combinedCacheRate,
+      sum.total_cached_input_tokens ?? p.cached_input_tokens,
+      sum.total_input_tokens ?? p.input_tokens
+    );
+
+    $('uCalls').textContent = `${sum.total_invocations ?? p.invocations ?? 0} 次`;
+
+    const uTime = $('uTotalTime');
+    const uScopedMs = p.total_runtime_ms || 0;
+    if (p.turns_in_progress > 0 && p.current_turn_started_ms > 0) {
+      const liveNowElapsed = Math.max(0, Date.now() - p.current_turn_started_ms);
+      const uBaseMs = isTurnScope ? 0 : Math.max(0, uScopedMs - liveNowElapsed);
+      uTime.dataset.liveStart = String(p.current_turn_started_ms);
+      uTime.dataset.baseMs = String(uBaseMs);
+      uTime.textContent = fmtDur(uBaseMs + liveNowElapsed);
+    } else {
+      uTime.dataset.liveStart = '0';
+      uTime.dataset.baseMs = '0';
+      uTime.textContent = fmtDur(uScopedMs);
+    }
+
+    const primaryTokens = Number(sum.primary_tokens_used ?? p.tokens_used ?? 0);
+    const subTokens = Number(sum.subagents_tokens_used ?? subs.reduce((acc, s) => acc + Number(s.tokens_used || 0), 0));
+    const totalTokensAll = Number(sum.total_tokens_used ?? (primaryTokens + subTokens));
+    $('uTokens').textContent = fmtTok(totalTokensAll);
+    $('uTokens').title = subTokens > 0
+      ? `總計 ${fmtTok(totalTokensAll)}（主代理 ${fmtTok(primaryTokens)} + 子代理 ${fmtTok(subTokens)}）`
+      : `主代理 ${fmtTok(primaryTokens)}`;
+
     $('uStatusPill').textContent = p.pending_permission
       ? '等待授權確認'
-      : (anyRunning ? (anySubRunning ? `多代理協作 (${subs.filter(s => s.is_running).length} 運行)` : '主模型運行中') : (hasData ? '回合已完成' : '待機中'));
+      : (anyRunning
+          ? (anySubRunning ? `多代理協作 (${subs.filter(s => s.is_running).length} 運行)` : '主模型運行中')
+          : (p.state === 'failed'
+              ? '回合執行失敗'
+              : (p.state === 'interrupted' ? '回合已中斷' : (hasData ? '回合已完成' : '待機中'))));
 
     // 4. Middle Green Capabilities / Fork Layer
     const routerEl = $('nodeRouter');
@@ -2034,7 +2186,8 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
     const turnIdx = String(isTurnScope ? (p.turn_index || 1) : (p.turns_completed || 0)).padStart(2, '0');
     const turnAll = String(p.session_turns_total || p.turns_total || 0).padStart(2, '0');
     const scopePrefix = isTurnScope ? '本輪' : '對話';
-    $('stepLine').textContent = `# [${scopePrefix} ${turnIdx}/${turnAll}] ${p.display_name || 'Codex'} · ${phaseClean} ${anyRunning ? '▮' : '✓'}`;
+    const endGlyph = anyRunning ? '▮' : ((p.state === 'failed' || p.state === 'interrupted') ? '✕' : '✓');
+    $('stepLine').textContent = `# [${scopePrefix} ${turnIdx}/${turnAll}] ${p.display_name || 'Codex'} · ${phaseClean} ${endGlyph}`;
 
     const srcMap = {
       'codex-sqlite': 'Codex 本機唯讀即時狀態',
@@ -2120,6 +2273,10 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
     if (mode === 'single') {
       const act = ['reasoning', 'edit', 'shell'][step % 3];
       const usedIds = isTurn ? ['reasoning', act] : ['reasoning', 'search', 'shell', 'edit'];
+      const pTok = isTurn ? 148000 + step * 12000 : 512000 + step * 18000;
+      const pIn = Math.round(pTok * 0.99);
+      const pCached = Math.round(pIn * (isTurn ? 0.914 : 0.952));
+      const pRate = computePct(pIn, pCached);
       return {
         source: 'demo', scope: activeScope, active_turn_id: 'turn-02', active_turn_index: 2, session_turns_total: 2,
         timestamp_ms: now, active_session_id: 'demo-single-sol', mode: 'single-model', sessions: [],
@@ -2130,10 +2287,11 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
           turns_total: isTurn ? 1 : 2, turns_completed: isTurn ? 0 : 1, turn_index: 2, session_turns_total: 2, turns_in_progress: 1,
           tool_calls_total: isTurn ? 3 + step : 10 + step, tool_calls_completed: isTurn ? 2 + step : 9 + step, tool_calls_in_flight: act === 'reasoning' ? 0 : 1,
           invocations: isTurn ? 4 + step : 12 + step, completion_pct: Math.min(92, 35 + step * 9),
+          input_tokens: pIn, cached_input_tokens: pCached, cache_hit_rate_pct: pRate,
           current_turn_started_ms: start, current_turn_elapsed_ms: now - start,
           total_runtime_ms: isTurn ? (now - start) : 82000 + (now - start),
           session_total_runtime_ms: 82000 + (now - start),
-          tokens_used: isTurn ? 148000 + step * 12000 : 512000 + step * 18000,
+          tokens_used: pTok,
           session_tokens_used: 512000 + step * 18000,
           context_window_tokens: 475000,
         },
@@ -2151,47 +2309,68 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
           { timestamp_ms: now - 6000, actor: 'GPT-6.2-Sol', kind: 'sol', label: '編修工作區檔案', duration_ms: 120 },
           { timestamp_ms: now - 1500, actor: 'GPT-6.2-Sol', kind: 'sol', label: '執行終端指令', duration_ms: 1450 },
         ],
-        summary: { has_data: true, total_invocations: isTurn ? 4 + step : 12 + step },
+        summary: {
+          has_data: true,
+          total_invocations: isTurn ? 4 + step : 12 + step,
+          primary_tokens_used: pTok,
+          subagents_tokens_used: 0,
+          total_tokens_used: pTok,
+          session_total_tokens_used: 512000 + step * 18000,
+          total_input_tokens: pIn,
+          total_cached_input_tokens: pCached,
+          cache_hit_rate_pct: pRate,
+        },
       };
     }
     if (mode === 'multi') {
       const ph = step % 3; // 0: Luna Search running; 1: Terra Audit running; 2: Astra Advisor running
+      const mkSub = (base, tok, rateRatio) => {
+        const inp = Math.round(tok * 0.99);
+        const cac = Math.round(inp * rateRatio);
+        return { ...base, tokens_used: tok, input_tokens: inp, cached_input_tokens: cac, cache_hit_rate_pct: computePct(inp, cac) };
+      };
       const allSubs = [
-        {
+        mkSub({
           id: 'adv-1', name: 'Astra Advisor', role: 'advisor', role_label: '架構顧問', agent_path: '/root/advisor',
           model: 'gpt-6.2-astra', model_display: 'GPT-6.2-Astra', family: 'astra', reasoning_effort: 'xhigh',
           state: ph === 2 ? 'running' : 'done', is_running: ph === 2, invocations: isTurn ? 1 : 2, tool_calls: isTurn ? 3 : 6,
           completed_turns: ph === 2 ? 0 : 1, total_turns: isTurn ? 1 : 2, completion_pct: ph === 2 ? 68 : 100,
-          elapsed_ms: isTurn ? 14000 : 31000, current_turn_started_ms: ph === 2 ? now - 11000 : 0, tokens_used: isTurn ? 190000 : 410000,
+          elapsed_ms: isTurn ? 14000 : 31000, current_turn_started_ms: ph === 2 ? now - 11000 : 0,
           current_activity: ph === 2 ? '正在審核最終變更差異' : '已完成本輪架構審核',
-        },
-        {
+        }, isTurn ? 190000 : 410000, 0.724),
+        mkSub({
           id: 'sub-1', name: 'Luna Search', role: 'search', role_label: '快速探索', agent_path: '/root/search',
           model: 'gpt-6-luna', model_display: 'GPT-6-Luna', family: 'luna', reasoning_effort: 'high',
           state: ph === 0 ? 'running' : 'done', is_running: ph === 0, invocations: isTurn ? 1 : 2, tool_calls: isTurn ? 6 : 15,
           completed_turns: ph === 0 ? 0 : 1, total_turns: isTurn ? 1 : 2, completion_pct: ph === 0 ? 64 : 100,
-          elapsed_ms: isTurn ? 9000 : 19000, current_turn_started_ms: ph === 0 ? now - 9000 : 0, tokens_used: isTurn ? 72000 : 180000,
+          elapsed_ms: isTurn ? 9000 : 19000, current_turn_started_ms: ph === 0 ? now - 9000 : 0,
           current_activity: ph === 0 ? '執行工具：rg --files' : '已完成儲存庫盤點',
-        },
-        {
+        }, isTurn ? 72000 : 180000, 0.874),
+        mkSub({
           id: 'sub-2', name: 'Luna Grep', role: 'grep', role_label: '精準檢索', agent_path: '/root/grep',
           model: 'gpt-6-luna', model_display: 'GPT-6-Luna', family: 'luna', reasoning_effort: 'high',
           state: 'done', is_running: false, invocations: 1, tool_calls: 9,
           completed_turns: 1, total_turns: 1, completion_pct: 100,
-          elapsed_ms: 12000, current_turn_started_ms: 0, tokens_used: 124000,
+          elapsed_ms: 12000, current_turn_started_ms: 0,
           current_activity: '前輪已完成引用分析',
-        },
-        {
+        }, 124000, 0.883),
+        mkSub({
           id: 'sub-3', name: 'Terra Audit', role: 'audit', role_label: '獨立審查', agent_path: '/root/audit',
           model: 'gpt-6.1-terra', model_display: 'GPT-6.1-Terra', family: 'terra', reasoning_effort: 'high',
           state: ph === 1 ? 'running' : 'done', is_running: ph === 1, invocations: 1, tool_calls: 11,
           completed_turns: ph === 1 ? 0 : 1, total_turns: 1, completion_pct: ph === 1 ? 72 : 100,
-          elapsed_ms: 26000, current_turn_started_ms: ph === 1 ? now - 16000 : 0, tokens_used: 320000,
+          elapsed_ms: 26000, current_turn_started_ms: ph === 1 ? now - 16000 : 0,
           current_activity: ph === 1 ? '正在執行範圍測試與 diff 檢查' : '審查與測試通過',
-        },
+        }, 320000, 0.924),
       ];
       // In 'turn' demo scope, omit Luna Grep (from an earlier turn) to show real scope filtering
       const subs = isTurn ? allSubs.filter(s => s.id !== 'sub-2') : allSubs;
+      const pTok = isTurn ? 520000 : 1840000;
+      const pIn = Math.round(pTok * 0.99);
+      const pCached = Math.round(pIn * (isTurn ? 0.988 : 0.976));
+      const subTokSum = subs.reduce((acc, s) => acc + s.tokens_used, 0);
+      const totIn = pIn + subs.reduce((acc, s) => acc + s.input_tokens, 0);
+      const totCached = pCached + subs.reduce((acc, s) => acc + s.cached_input_tokens, 0);
       return {
         source: 'demo', scope: activeScope, active_turn_id: 'turn-04', active_turn_index: 4, session_turns_total: 4,
         timestamp_ms: now, active_session_id: 'demo-multi-tui', mode: 'multi-agent', sessions: [],
@@ -2202,10 +2381,11 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
           turns_total: isTurn ? 1 : 4, turns_completed: isTurn ? 0 : 3, turn_index: 4, session_turns_total: 4, turns_in_progress: 1,
           tool_calls_total: isTurn ? 9 : 28, tool_calls_completed: isTurn ? 9 : 28, tool_calls_in_flight: 0,
           invocations: isTurn ? 10 : 32, completion_pct: ph === 0 ? 54 : (ph === 1 ? 78 : 90),
+          input_tokens: pIn, cached_input_tokens: pCached, cache_hit_rate_pct: computePct(pIn, pCached),
           current_turn_started_ms: start, current_turn_elapsed_ms: now - start,
           total_runtime_ms: isTurn ? (now - start) : 194000 + (now - start),
           session_total_runtime_ms: 194000 + (now - start),
-          tokens_used: isTurn ? 520000 : 1840000,
+          tokens_used: pTok,
           session_tokens_used: 1840000,
           context_window_tokens: 475000,
         },
@@ -2223,9 +2403,23 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
           { timestamp_ms: now - 9000, actor: 'Luna Search', kind: 'luna', label: '讀取／查詢工作區檔案', duration_ms: 620 },
           { timestamp_ms: now - 2000, actor: ph === 2 ? 'Astra Advisor' : 'Terra Audit', kind: ph === 2 ? 'astra' : 'terra', label: ph === 2 ? '完成一段深度推理' : '執行終端指令', duration_ms: 1840 },
         ],
-        summary: { has_data: true, total_invocations: isTurn ? 13 : 38 },
+        summary: {
+          has_data: true,
+          total_invocations: isTurn ? 13 : 38,
+          primary_tokens_used: pTok,
+          subagents_tokens_used: subTokSum,
+          total_tokens_used: pTok + subTokSum,
+          session_total_tokens_used: 1840000 + 410000 + 180000 + 124000 + 320000,
+          total_input_tokens: totIn,
+          total_cached_input_tokens: totCached,
+          cache_hit_rate_pct: computePct(totIn, totCached),
+        },
       };
     }
+    const idleTok = isTurn ? 210000 : 640000;
+    const idleIn = Math.round(idleTok * 0.99);
+    const idleCached = Math.round(idleIn * 0.964);
+    const idleRate = computePct(idleIn, idleCached);
     return {
       source: 'demo', scope: activeScope, active_turn_id: 'turn-02', active_turn_index: 2, session_turns_total: 2,
       timestamp_ms: now, active_session_id: 'demo-idle', mode: 'single-model', sessions: [],
@@ -2234,9 +2428,11 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
         state: 'done', is_running: false, current_phase: '回合已完成 · 待命中',
         turns_total: isTurn ? 1 : 2, turns_completed: isTurn ? 1 : 2, turn_index: 2, session_turns_total: 2, turns_in_progress: 0,
         tool_calls_total: isTurn ? 5 : 14, tool_calls_completed: isTurn ? 5 : 14, tool_calls_in_flight: 0,
-        invocations: isTurn ? 6 : 16, completion_pct: 100, current_turn_started_ms: 0, current_turn_elapsed_ms: 44000,
+        invocations: isTurn ? 6 : 16, completion_pct: 100,
+        input_tokens: idleIn, cached_input_tokens: idleCached, cache_hit_rate_pct: idleRate,
+        current_turn_started_ms: 0, current_turn_elapsed_ms: 44000,
         total_runtime_ms: isTurn ? 44000 : 98000, session_total_runtime_ms: 98000,
-        tokens_used: isTurn ? 210000 : 640000, session_tokens_used: 640000, context_window_tokens: 475000,
+        tokens_used: idleTok, session_tokens_used: 640000, context_window_tokens: 475000,
       },
       capabilities: baseCaps.slice(0, 3).map(c => ({
         ...c, used: true, is_running: false, state: 'done', count: isTurn ? 2 : 4, completed_count: isTurn ? 2 : 4, failed_count: 0,
@@ -2244,7 +2440,17 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
       })),
       subagents: [],
       events: [{ timestamp_ms: now - 40000, actor: 'GPT-6.2-Sol', kind: 'sol', label: '編修工作區檔案', duration_ms: 210 }],
-      summary: { has_data: true, total_invocations: isTurn ? 6 : 16 },
+      summary: {
+        has_data: true,
+        total_invocations: isTurn ? 6 : 16,
+        primary_tokens_used: idleTok,
+        subagents_tokens_used: 0,
+        total_tokens_used: idleTok,
+        session_total_tokens_used: 640000,
+        total_input_tokens: idleIn,
+        total_cached_input_tokens: idleCached,
+        cache_hit_rate_pct: idleRate,
+      },
     };
   }
 

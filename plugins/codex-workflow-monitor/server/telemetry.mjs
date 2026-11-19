@@ -96,6 +96,39 @@ export function inferModelFamily(model = '', role = '') {
   return 'blue';
 }
 
+export function computeCacheHitRatePct(inputTokens = 0, cachedInputTokens = 0) {
+  const input = Number(inputTokens || 0);
+  const cached = Number(cachedInputTokens || 0);
+  if (!(input > 0)) return null;
+  const pct = Math.max(0, Math.min(100, (cached / input) * 100));
+  return Math.round(pct * 10) / 10;
+}
+
+function normalizeUsageObject(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const input = Math.max(0, Number(raw.input_tokens || 0));
+  const cached = Math.max(0, Number(raw.cached_input_tokens ?? raw.cache_read_input_tokens ?? 0));
+  const output = Math.max(0, Number(raw.output_tokens || 0));
+  const total = Math.max(0, Number(raw.total_tokens || 0) || (input + output));
+  if (!(input > 0 || cached > 0 || output > 0 || total > 0)) return null;
+  return {
+    input_tokens: input,
+    cached_input_tokens: cached,
+    output_tokens: output,
+    total_tokens: total,
+  };
+}
+
+function pickRicherUsage(prev, next) {
+  if (!next) return prev || null;
+  if (!prev) return next;
+  if (next.total_tokens > prev.total_tokens) return next;
+  if (next.total_tokens < prev.total_tokens) return prev;
+  if (next.input_tokens > prev.input_tokens) return next;
+  if (next.cached_input_tokens > prev.cached_input_tokens) return next;
+  return prev;
+}
+
 export function isSelfMonitorTool(serverName = '', toolName = '') {
   const srv = String(serverName || '').toLowerCase();
   const tool = String(toolName || '').toLowerCase();
@@ -103,6 +136,24 @@ export function isSelfMonitorTool(serverName = '', toolName = '') {
   if (SELF_TOOL_NAMES.has(tool)) return true;
   if (tool.includes('workflow_monitor') || tool.includes('workflow_events')) return true;
   return false;
+}
+
+function isSubagentOrchestrationTool(toolName = '', namespace = '') {
+  const ns = String(namespace || '').toLowerCase();
+  if (ns === 'collaboration') return true;
+  const t = String(toolName || '').toLowerCase();
+  return [
+    'wait',
+    'wait_agent',
+    'spawn_agent',
+    'send_input',
+    'send_message',
+    'followup_task',
+    'close_agent',
+    'resume_agent',
+    'list_agents',
+    'agent',
+  ].includes(t);
 }
 
 export function classifyToolToCapability(toolName = '', itemType = '', commandActionType = '', serverName = '') {
@@ -115,6 +166,7 @@ export function classifyToolToCapability(toolName = '', itemType = '', commandAc
   if (it === 'plan') return 'plan';
   if (it === 'mcpToolCall') {
     const srv = String(serverName || '').toLowerCase();
+    if (srv === 'collaboration') return '';
     if (srv.includes('codegraph')) return 'search';
     return 'mcp';
   }
@@ -124,6 +176,7 @@ export function classifyToolToCapability(toolName = '', itemType = '', commandAc
     return 'shell';
   }
 
+  if (isSubagentOrchestrationTool(toolName, serverName)) return '';
   const t = String(toolName || '').toLowerCase();
   if (!t) return '';
   if (['update_plan', 'plan'].some(k => t === k || t.includes('plan'))) return 'plan';
@@ -132,13 +185,8 @@ export function classifyToolToCapability(toolName = '', itemType = '', commandAc
   if (['web_search', 'websearch', 'webfetch', 'fetch'].some(k => t.includes(k))) return 'web';
   if (['image', 'screenshot', 'vision'].some(k => t.includes(k))) return 'vision';
   if (['exec', 'bash', 'shell', 'command', 'terminal', 'run'].some(k => t.includes(k))) return 'shell';
-  if (['spawn_agent', 'send_input', 'followup_task', 'wait', 'close_agent', 'agent'].some(k => t === k || t.includes('subagent'))) return '';
+  if (t.includes('subagent')) return '';
   return 'mcp';
-}
-
-function isSubagentOrchestrationTool(toolName = '') {
-  const t = String(toolName || '').toLowerCase();
-  return ['wait', 'spawn_agent', 'send_input', 'followup_task', 'close_agent', 'resume_agent', 'agent'].includes(t);
 }
 
 function safeJsonParse(str) {
@@ -151,24 +199,129 @@ function safeJsonParse(str) {
 }
 
 function readFileTailText(filePath, maxBytes = 256 * 1024) {
-  if (!filePath || !existsSync(filePath)) return { text: '', mtimeMs: 0 };
+  if (!filePath || !existsSync(filePath)) return { text: '', mtimeMs: 0, size: 0 };
   let fd;
   try {
     fd = openSync(filePath, 'r');
     const st = fstatSync(fd);
     const mtimeMs = Number(st.mtimeMs || 0);
-    if (!st.size) return { text: '', mtimeMs };
-    const count = Math.min(st.size, maxBytes);
+    const size = Number(st.size || 0);
+    if (!size) return { text: '', mtimeMs, size: 0 };
+    const count = Math.min(size, maxBytes);
     const buf = Buffer.alloc(count);
-    readSync(fd, buf, 0, count, st.size - count);
-    let text = buf.toString('utf8');
-    if (st.size > count) {
-      const nl = text.indexOf('\n');
-      if (nl !== -1) text = text.slice(nl + 1);
+    const bytesRead = readSync(fd, buf, 0, count, size - count);
+    let slice = bytesRead < count ? buf.subarray(0, bytesRead) : buf;
+    if (size > count) {
+      // Search newline directly in bytes before UTF-8 decoding to avoid splitting multi-byte chars.
+      const nl = slice.indexOf(0x0a);
+      slice = nl !== -1 ? slice.subarray(nl + 1) : Buffer.alloc(0);
     }
-    return { text, mtimeMs };
+    return { text: slice.toString('utf8'), mtimeMs, size };
   } catch {
-    return { text: '', mtimeMs: 0 };
+    return { text: '', mtimeMs: 0, size: 0 };
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch {}
+    }
+  }
+}
+
+/**
+ * Losslessly scans backward within [rangeStart, rangeEnd] of a rollout JSONL file to locate the
+ * latest token usage record (thread_token_usage / turn_token_usage / token_count) without reading
+ * huge rollout files end-to-end. Never returns prompts, arguments, or content.
+ */
+export function scanRolloutUsageBackward(
+  filePath,
+  { rangeStart = 0, rangeEnd = null, targetTurnId = '', maxScanBytes = 4 * 1024 * 1024 } = {}
+) {
+  const result = {
+    threadTokenUsage: null,
+    tokenCountTotalUsage: null,
+    turnUsage: null,
+    contextWindowTokens: 0,
+  };
+  if (!filePath || !existsSync(filePath)) return result;
+
+  let fd;
+  try {
+    fd = openSync(filePath, 'r');
+    const st = fstatSync(fd);
+    const size = Number(st.size || 0);
+    if (!size) return result;
+
+    const floor = Math.max(0, Math.min(size, Number(rangeStart || 0)));
+    let cursor = rangeEnd !== null && rangeEnd !== undefined && Number(rangeEnd) > 0
+      ? Math.max(floor, Math.min(size, Number(rangeEnd)))
+      : size;
+
+    let scanned = 0;
+    let chunkSize = 256 * 1024;
+
+    while (cursor > floor && scanned < maxScanBytes) {
+      const remainingBudget = maxScanBytes - scanned;
+      const step = Math.min(chunkSize, cursor - floor, remainingBudget);
+      if (step <= 0) break;
+      const chunkStart = cursor - step;
+      const buf = Buffer.alloc(step);
+      const bytesRead = readSync(fd, buf, 0, step, chunkStart);
+      scanned += bytesRead;
+      const slice = bytesRead < step ? buf.subarray(0, bytesRead) : buf;
+
+      let textSlice = slice;
+      let nextCursor = floor;
+      if (chunkStart > floor) {
+        const nl = slice.indexOf(0x0a);
+        if (nl === -1) {
+          // Giant line (> chunkSize) spans this entire chunk; jump cleanly past it.
+          cursor = chunkStart;
+          chunkSize = Math.min(1024 * 1024, chunkSize * 2);
+          continue;
+        }
+        textSlice = slice.subarray(nl + 1);
+        nextCursor = chunkStart + nl + 1;
+        if (nextCursor >= cursor) {
+          // Only newline was at the very end of the chunk (giant line ended right at cursor).
+          nextCursor = chunkStart;
+        }
+      }
+
+      const lines = textSlice.toString('utf8').split(/\r?\n/);
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i];
+        if (!line) continue;
+        if (!line.includes('token_usage_record') && !line.includes('token_count')) continue;
+        const obj = safeJsonParse(line);
+        if (!obj || typeof obj !== 'object') continue;
+        const payload = obj.payload && typeof obj.payload === 'object' ? obj.payload : null;
+        if (!payload) continue;
+
+        if (obj.type === 'token_usage_record') {
+          const thUsage = normalizeUsageObject(payload.thread_token_usage);
+          if (thUsage) result.threadTokenUsage = pickRicherUsage(result.threadTokenUsage, thUsage);
+          if (targetTurnId && payload.turn_id === targetTurnId) {
+            const trUsage = normalizeUsageObject(payload.turn_token_usage);
+            if (trUsage) {
+              result.turnUsage = pickRicherUsage(result.turnUsage, trUsage);
+            }
+          }
+        } else if (obj.type === 'event_msg' && payload.type === 'token_count') {
+          const cntUsage = normalizeUsageObject(payload.info?.total_token_usage);
+          if (cntUsage) result.tokenCountTotalUsage = pickRicherUsage(result.tokenCountTotalUsage, cntUsage);
+          const win = Number(payload.info?.model_context_window || 0);
+          if (win > 0 && !result.contextWindowTokens) result.contextWindowTokens = win;
+        }
+      }
+
+      if (targetTurnId && result.turnUsage) break;
+      if (!targetTurnId && (result.threadTokenUsage || result.tokenCountTotalUsage)) break;
+
+      cursor = nextCursor;
+      chunkSize = Math.min(1024 * 1024, chunkSize * 2);
+    }
+    return result;
+  } catch {
+    return result;
   } finally {
     if (fd !== undefined) {
       try { closeSync(fd); } catch {}
@@ -184,6 +337,7 @@ export function inspectRolloutTail(rolloutPath, maxBytes = 256 * 1024) {
   const empty = {
     exists: false,
     mtimeMs: 0,
+    size: 0,
     latestModel: '',
     latestEffort: '',
     inFlightCalls: [],
@@ -193,16 +347,17 @@ export function inspectRolloutTail(rolloutPath, maxBytes = 256 * 1024) {
     lastActivityMs: 0,
     lastReasoningMs: 0,
     lastTokenTotal: 0,
+    threadTokenUsage: null,
+    tokenCountTotalUsage: null,
+    turnUsageByTurnId: {},
     turnTokensByTurnId: {},
     contextWindowTokens: 0,
     recentEvents: [],
   };
   if (!rolloutPath || !existsSync(rolloutPath)) return empty;
 
-  const { text, mtimeMs } = readFileTailText(rolloutPath, maxBytes);
-  if (!text) return { ...empty, exists: true, mtimeMs };
-
-  const lines = text.split(/\r?\n/).filter(Boolean);
+  const { text, mtimeMs, size } = readFileTailText(rolloutPath, maxBytes);
+  const lines = text ? text.split(/\r?\n/).filter(Boolean) : [];
   const openCalls = new Map();
   let latestModel = '';
   let latestEffort = '';
@@ -211,6 +366,9 @@ export function inspectRolloutTail(rolloutPath, maxBytes = 256 * 1024) {
   let lastActivityMs = mtimeMs;
   let lastReasoningMs = 0;
   let lastTokenTotal = 0;
+  let threadTokenUsage = null;
+  let tokenCountTotalUsage = null;
+  const turnUsageByTurnId = {};
   const turnTokensByTurnId = {};
   let contextWindowTokens = 0;
   const recentEvents = [];
@@ -249,8 +407,11 @@ export function inspectRolloutTail(rolloutPath, maxBytes = 256 * 1024) {
         turnActiveInRollout = false;
         openCalls.clear();
       } else if (pType === 'token_count') {
-        const total = payload.info?.total_token_usage?.total_tokens;
-        if (typeof total === 'number' && total > lastTokenTotal) lastTokenTotal = total;
+        const cntUsage = normalizeUsageObject(payload.info?.total_token_usage);
+        if (cntUsage) {
+          tokenCountTotalUsage = pickRicherUsage(tokenCountTotalUsage, cntUsage);
+          if (cntUsage.total_tokens > lastTokenTotal) lastTokenTotal = cntUsage.total_tokens;
+        }
         const win = payload.info?.model_context_window;
         if (typeof win === 'number' && win > 0) contextWindowTokens = win;
       }
@@ -258,12 +419,17 @@ export function inspectRolloutTail(rolloutPath, maxBytes = 256 * 1024) {
     }
 
     if (topType === 'token_usage_record' && payload) {
-      const total = payload.thread_token_usage?.total_tokens;
-      if (typeof total === 'number' && total > lastTokenTotal) lastTokenTotal = total;
-      const turnTotal = payload.turn_token_usage?.total_tokens;
+      const thUsage = normalizeUsageObject(payload.thread_token_usage);
+      if (thUsage) {
+        threadTokenUsage = pickRicherUsage(threadTokenUsage, thUsage);
+        if (thUsage.total_tokens > lastTokenTotal) lastTokenTotal = thUsage.total_tokens;
+      }
+      const trUsage = normalizeUsageObject(payload.turn_token_usage);
       const tid = payload.turn_id;
-      if (tid && typeof turnTotal === 'number' && turnTotal >= (turnTokensByTurnId[tid] || 0)) {
-        turnTokensByTurnId[tid] = turnTotal;
+      if (tid && trUsage) {
+        const merged = pickRicherUsage(turnUsageByTurnId[tid], trUsage);
+        turnUsageByTurnId[tid] = merged;
+        turnTokensByTurnId[tid] = merged.total_tokens;
       }
       continue;
     }
@@ -283,7 +449,7 @@ export function inspectRolloutTail(rolloutPath, maxBytes = 256 * 1024) {
             tool_name: name || 'tool',
             namespace: ns,
             capability: cap,
-            is_subagent_wait: isSubagentOrchestrationTool(name),
+            is_subagent_wait: isSubagentOrchestrationTool(name, ns),
             timestamp_ms: tsMs || mtimeMs,
           });
           recentEvents.push({
@@ -303,12 +469,33 @@ export function inspectRolloutTail(rolloutPath, maxBytes = 256 * 1024) {
     }
   }
 
+  // If a huge tool output pushed token records beyond the initial tail window, step backward to recover usage.
+  if (!threadTokenUsage && !tokenCountTotalUsage && size > maxBytes) {
+    const recovered = scanRolloutUsageBackward(rolloutPath, {
+      rangeStart: 0,
+      rangeEnd: Math.max(0, size - maxBytes + 4096),
+      maxScanBytes: 4 * 1024 * 1024,
+    });
+    if (recovered.threadTokenUsage) {
+      threadTokenUsage = pickRicherUsage(threadTokenUsage, recovered.threadTokenUsage);
+      lastTokenTotal = Math.max(lastTokenTotal, threadTokenUsage.total_tokens);
+    }
+    if (recovered.tokenCountTotalUsage) {
+      tokenCountTotalUsage = pickRicherUsage(tokenCountTotalUsage, recovered.tokenCountTotalUsage);
+      lastTokenTotal = Math.max(lastTokenTotal, tokenCountTotalUsage.total_tokens);
+    }
+    if (recovered.contextWindowTokens && !contextWindowTokens) {
+      contextWindowTokens = recovered.contextWindowTokens;
+    }
+  }
+
   const inFlightCalls = Array.from(openCalls.values());
   const waitingOnSubagent = inFlightCalls.some(c => c.is_subagent_wait);
 
   return {
     exists: true,
     mtimeMs,
+    size,
     latestModel,
     latestEffort,
     inFlightCalls,
@@ -318,6 +505,9 @@ export function inspectRolloutTail(rolloutPath, maxBytes = 256 * 1024) {
     lastActivityMs,
     lastReasoningMs,
     lastTokenTotal,
+    threadTokenUsage,
+    tokenCountTotalUsage,
+    turnUsageByTurnId,
     turnTokensByTurnId,
     contextWindowTokens,
     recentEvents: recentEvents.slice(-30),
@@ -480,7 +670,8 @@ function formatSafeItemEvent(row, actorName, actorKind) {
     label = '完成一段深度推理';
   } else if (type === 'commandExecution') {
     const st = row.item_status === 'failed' ? '（失敗）' : '';
-    label = row.cmd_action === 'read' ? `讀取／查詢工作區檔案${st}` : `執行終端指令${st}`;
+    const ca = String(row.cmd_action || '').toLowerCase();
+    label = ['read', 'search', 'listfiles'].includes(ca) ? `讀取／查詢工作區檔案${st}` : `執行終端指令${st}`;
   } else if (type === 'fileChange') {
     label = `編修工作區檔案${row.item_status === 'failed' ? '（失敗）' : ''}`;
   } else if (type === 'mcpToolCall') {
@@ -523,16 +714,27 @@ function formatSafeItemEvent(row, actorName, actorKind) {
 function buildHookOnlyPayload(hookEvents, { session_id = '', scope = 'session', limit = 80, nowMs = Date.now() } = {}) {
   const normalizedScope = scope === 'turn' ? 'turn' : 'session';
   const sessionMap = new Map();
+  const sessionSubSetMap = new Map();
   for (const e of hookEvents) {
     const sid = e.session_id || 'default';
     const prev = sessionMap.get(sid);
+    let subSet = sessionSubSetMap.get(sid);
+    if (!subSet) {
+      subSet = new Set();
+      sessionSubSetMap.set(sid, subSet);
+    }
+    if (e.event_type === 'SubagentStart' || e.event_type === 'SubagentStop' || e.agent_id) {
+      subSet.add(e.agent_id || `role:${e.agent_type || 'subagent'}`);
+    }
+    const tsMs = Number(e.timestamp_ms || nowMs);
+    const notEnded = !['Stop', 'Interrupt', 'SessionEnd'].includes(e.event_type);
     sessionMap.set(sid, {
       session_id: sid,
       model: e.model && !e.agent_id ? e.model : (prev?.model || ''),
       model_display: formatModelDisplayName(e.model && !e.agent_id ? e.model : (prev?.model || 'gpt-6.2-sol')),
-      is_running: !['Stop', 'Interrupt', 'SessionEnd'].includes(e.event_type),
-      updated_at_ms: Number(e.timestamp_ms || nowMs),
-      subagent_count: prev?.subagent_count || 0,
+      is_running: notEnded && (nowMs - tsMs < ACTIVE_TURN_FRESHNESS_MS),
+      updated_at_ms: Math.max(prev?.updated_at_ms || 0, tsMs),
+      subagent_count: subSet.size,
       event_count: (prev?.event_count || 0) + 1,
       source: 'hooks',
     });
@@ -545,13 +747,20 @@ function buildHookOnlyPayload(hookEvents, { session_id = '', scope = 'session', 
   const activeSid = requested || sessions[0]?.session_id || '';
   const allSessionEvs = hookEvents.filter(e => !activeSid || (e.session_id || 'default') === activeSid);
 
-  // Preserve primary model & total turn count across the session even when slicing to current turn
+  // Preserve primary model, total turn count & session token totals even when slicing to current turn
   let sessionPrimaryModel = '';
   let sessionTurnsTotal = 0;
+  let sessionPrimaryTokens = 0;
+  let sessionSubagentsTokens = 0;
   let lastTurnId = '';
   let lastPromptIdx = -1;
   allSessionEvs.forEach((e, idx) => {
     if (e.model && !e.agent_id) sessionPrimaryModel = e.model;
+    const u = normalizeUsageObject(e.token_usage);
+    if (u) {
+      if (e.agent_id) sessionSubagentsTokens += u.total_tokens;
+      else sessionPrimaryTokens += u.total_tokens;
+    }
     if (e.event_type === 'UserPromptSubmit') {
       sessionTurnsTotal++;
       lastPromptIdx = idx;
@@ -572,7 +781,9 @@ function buildHookOnlyPayload(hookEvents, { session_id = '', scope = 'session', 
   const subMap = new Map();
   const inFlightTools = new Map();
   let primaryModel = sessionPrimaryModel;
-  let totalTokens = 0;
+  let primaryTokens = 0;
+  let primaryInputTokens = 0;
+  let primaryCachedInputTokens = 0;
   let turnsTotal = 0;
   let turnsCompleted = 0;
   let toolTotal = 0;
@@ -581,27 +792,37 @@ function buildHookOnlyPayload(hookEvents, { session_id = '', scope = 'session', 
   let lastTs = 0;
   let pendingPermission = false;
   let sessionEnded = false;
+  let lastStopType = '';
 
   for (const e of evs) {
     const ts = Number(e.timestamp_ms || 0);
     if (ts && (!firstTs || ts < firstTs)) firstTs = ts;
     if (ts > lastTs) lastTs = ts;
     if (e.model && !e.agent_id) primaryModel = e.model;
-    if (e.token_usage?.total_tokens) totalTokens += Number(e.token_usage.total_tokens);
 
     if (e.event_type === 'UserPromptSubmit' || e.event_type === 'SessionStart') {
       if (e.event_type === 'UserPromptSubmit') turnsTotal++;
       sessionEnded = false;
+      lastStopType = '';
     } else if (e.event_type === 'Stop' || e.event_type === 'Interrupt' || e.event_type === 'SessionEnd') {
       sessionEnded = true;
+      lastStopType = e.event_type;
       turnsCompleted = Math.max(turnsCompleted, turnsTotal || 1);
       inFlightTools.clear();
       pendingPermission = false;
+      for (const c of Object.values(capMap)) {
+        c.in_flight = 0;
+        c.is_running = false;
+      }
       for (const s of subMap.values()) {
         if (s.is_running) {
           s.is_running = false;
-          s.state = 'done';
-          s.completion_pct = 100;
+          s.state = e.event_type === 'Interrupt' ? 'interrupted' : 'done';
+          s.completion_pct = e.event_type === 'Interrupt' ? s.completion_pct : 100;
+          if (s.current_turn_started_ms && ts >= s.current_turn_started_ms) {
+            s.elapsed_ms += ts - s.current_turn_started_ms;
+          }
+          s.current_turn_started_ms = 0;
         }
       }
     } else if (e.event_type === 'PermissionRequest') {
@@ -634,10 +855,22 @@ function buildHookOnlyPayload(hookEvents, { session_id = '', scope = 'session', 
           elapsed_ms: 0,
           current_turn_started_ms: ts || nowMs,
           tokens_used: 0,
+          session_tokens_used: 0,
+          input_tokens: 0,
+          cached_input_tokens: 0,
+          cache_hit_rate_pct: null,
           current_activity: e.label || '子代理執行中',
           in_flight_tools: [],
         };
         subMap.set(subId, sub);
+      }
+      const subUsage = normalizeUsageObject(e.token_usage);
+      if (subUsage) {
+        sub.tokens_used += subUsage.total_tokens;
+        sub.session_tokens_used += subUsage.total_tokens;
+        sub.input_tokens += subUsage.input_tokens;
+        sub.cached_input_tokens += subUsage.cached_input_tokens;
+        sub.cache_hit_rate_pct = computeCacheHitRatePct(sub.input_tokens, sub.cached_input_tokens);
       }
       if (e.event_type === 'SubagentStart') {
         sub.invocations++;
@@ -660,8 +893,17 @@ function buildHookOnlyPayload(hookEvents, { session_id = '', scope = 'session', 
       } else if (e.event_type === 'PreToolUse') {
         sub.tool_calls++;
         sub.current_activity = `執行工具：${e.tool_name || 'tool'}`;
+      } else if (e.event_type === 'PostToolUse') {
+        sub.current_activity = `完成工具：${e.tool_name || 'tool'}`;
       }
       continue;
+    }
+
+    const usage = normalizeUsageObject(e.token_usage);
+    if (usage) {
+      primaryTokens += usage.total_tokens;
+      primaryInputTokens += usage.input_tokens;
+      primaryCachedInputTokens += usage.cached_input_tokens;
     }
 
     if (e.event_type === 'PreModelRequest') {
@@ -718,7 +960,15 @@ function buildHookOnlyPayload(hookEvents, { session_id = '', scope = 'session', 
     }
   }
 
-  const subagents = Array.from(subMap.values());
+  const subagents = Array.from(subMap.values()).map(s => {
+    if (s.is_running && s.current_turn_started_ms > 0) {
+      return {
+        ...s,
+        elapsed_ms: s.elapsed_ms + Math.max(0, nowMs - s.current_turn_started_ms),
+      };
+    }
+    return s;
+  });
   const anySubRunning = subagents.some(s => s.is_running);
   const isRunning = evs.length > 0 && !sessionEnded && (nowMs - lastTs < ACTIVE_TURN_FRESHNESS_MS);
   const capabilities = finalizeCapabilities(capMap, nowMs);
@@ -735,12 +985,21 @@ function buildHookOnlyPayload(hookEvents, { session_id = '', scope = 'session', 
     }
   }
 
+  const primaryCacheHitRatePct = computeCacheHitRatePct(primaryInputTokens, primaryCachedInputTokens);
+  const subagentsTokensUsed = subagents.reduce((acc, s) => acc + Number(s.tokens_used || 0), 0);
+  const totalTokensUsed = primaryTokens + subagentsTokensUsed;
+  const totalInputTokens = primaryInputTokens + subagents.reduce((acc, s) => acc + Number(s.input_tokens || 0), 0);
+  const totalCachedInputTokens = primaryCachedInputTokens + subagents.reduce((acc, s) => acc + Number(s.cached_input_tokens || 0), 0);
+  const combinedCacheHitRatePct = computeCacheHitRatePct(totalInputTokens, totalCachedInputTokens);
+
   let currentPhase = '待機中 · 等待 Codex 任務';
   if (pendingPermission) currentPhase = '等待權限授權確認';
   else if (isRunning) {
     if (anySubRunning) currentPhase = `正在協作子代理（${subagents.filter(s => s.is_running).length} 個運行中）`;
     else if (inFlightTools.size > 0) currentPhase = `執行工具：${Array.from(inFlightTools.values()).map(x => x.tool_name).join(', ')}`;
     else currentPhase = '深度推理與生成中';
+  } else if (lastStopType === 'Interrupt') {
+    currentPhase = '回合已中斷';
   } else if (evs.length > 0) {
     currentPhase = '回合已完成';
   }
@@ -758,6 +1017,9 @@ function buildHookOnlyPayload(hookEvents, { session_id = '', scope = 'session', 
   }));
 
   const effectiveSessionTurns = Math.max(sessionTurnsTotal, turnsTotal, evs.length ? 1 : 0);
+  const scopedTurns = normalizedScope === 'turn' ? (evs.length ? 1 : 0) : effectiveSessionTurns;
+  const primaryInvocations = toolTotal + scopedTurns;
+  const totalInvocations = primaryInvocations + subagents.reduce((acc, s) => acc + s.invocations, 0);
 
   return {
     connected: true,
@@ -776,23 +1038,32 @@ function buildHookOnlyPayload(hookEvents, { session_id = '', scope = 'session', 
       display_name: formatModelDisplayName(modelName),
       family: inferModelFamily(modelName, ''),
       reasoning_effort: '',
-      state: pendingPermission ? 'waiting_permission' : (isRunning ? (anySubRunning ? 'waiting_subagent' : 'running') : (evs.length ? 'done' : 'idle')),
+      state: pendingPermission
+        ? 'waiting_permission'
+        : (isRunning
+            ? (anySubRunning ? 'waiting_subagent' : 'running')
+            : (lastStopType === 'Interrupt' ? 'interrupted' : (evs.length ? 'done' : 'idle'))),
       is_running: isRunning,
       current_phase: currentPhase,
-      turns_total: normalizedScope === 'turn' ? (evs.length ? 1 : 0) : effectiveSessionTurns,
-      turns_completed: normalizedScope === 'turn' ? (!isRunning && evs.length ? 1 : 0) : turnsCompleted,
+      turns_total: scopedTurns,
+      turns_completed: normalizedScope === 'turn' ? (!isRunning && evs.length && lastStopType !== 'Interrupt' ? 1 : 0) : turnsCompleted,
       turn_index: effectiveSessionTurns,
       session_turns_total: effectiveSessionTurns,
       turns_in_progress: isRunning ? 1 : 0,
       tool_calls_total: toolTotal,
       tool_calls_completed: toolCompleted,
       tool_calls_in_flight: inFlightTools.size,
-      invocations: toolTotal + (normalizedScope === 'turn' ? (evs.length ? 1 : 0) : effectiveSessionTurns),
+      invocations: primaryInvocations,
       completion_pct: completionPct,
+      input_tokens: primaryInputTokens,
+      cached_input_tokens: primaryCachedInputTokens,
+      cache_hit_rate_pct: primaryCacheHitRatePct,
       current_turn_started_ms: isRunning ? firstTs : 0,
       current_turn_elapsed_ms: elapsedMs,
       total_runtime_ms: elapsedMs,
-      tokens_used: totalTokens,
+      session_total_runtime_ms: elapsedMs,
+      tokens_used: primaryTokens,
+      session_tokens_used: Math.max(sessionPrimaryTokens, primaryTokens),
       context_window_tokens: 0,
       pending_permission: pendingPermission,
     },
@@ -805,11 +1076,70 @@ function buildHookOnlyPayload(hookEvents, { session_id = '', scope = 'session', 
       running_capabilities_count: capabilities.filter(c => c.is_running).length,
       total_subagents: subagents.length,
       running_subagents: subagents.filter(s => s.is_running).length,
-      total_invocations: toolTotal + subagents.reduce((acc, s) => acc + s.invocations, 0),
+      total_invocations: totalInvocations,
       total_runtime_ms: elapsedMs,
+      primary_tokens_used: primaryTokens,
+      subagents_tokens_used: subagentsTokensUsed,
+      total_tokens_used: totalTokensUsed,
+      session_total_tokens_used: Math.max(sessionPrimaryTokens + sessionSubagentsTokens, totalTokensUsed),
+      total_input_tokens: totalInputTokens,
+      total_cached_input_tokens: totalCachedInputTokens,
+      cache_hit_rate_pct: combinedCacheHitRatePct,
       session_ended: !isRunning,
       has_data: evs.length > 0,
     },
+  };
+}
+
+function resolveSessionTokenUsage(dbTokensUsed, rollout) {
+  const best = pickRicherUsage(rollout?.threadTokenUsage, rollout?.tokenCountTotalUsage);
+  return {
+    total_tokens: Math.max(Number(dbTokensUsed || 0), best?.total_tokens || 0),
+    input_tokens: best?.input_tokens || 0,
+    cached_input_tokens: best?.cached_input_tokens || 0,
+  };
+}
+
+function resolveTurnTokenUsage(rolloutPath, rollout, targetTurns, allTurnsCount, sessionUsage) {
+  let totalTokens = 0;
+  let inputTokens = 0;
+  let cachedInputTokens = 0;
+  let matched = 0;
+
+  for (const tr of targetTurns || []) {
+    if (!tr?.turn_id) continue;
+    let u = rollout?.turnUsageByTurnId?.[tr.turn_id] || null;
+    if (!u && rolloutPath && rollout?.exists) {
+      const hasRange = tr.rollout_byte_offset !== undefined && tr.rollout_byte_offset !== null;
+      const scanned = scanRolloutUsageBackward(rolloutPath, {
+        rangeStart: hasRange ? Number(tr.rollout_byte_offset || 0) : 0,
+        rangeEnd: tr.rollout_end_byte_offset ? Number(tr.rollout_end_byte_offset) : null,
+        targetTurnId: tr.turn_id,
+        maxScanBytes: 4 * 1024 * 1024,
+      });
+      u = scanned.turnUsage || null;
+    }
+    if (u) {
+      totalTokens += u.total_tokens;
+      inputTokens += u.input_tokens;
+      cachedInputTokens += u.cached_input_tokens;
+      matched++;
+    }
+  }
+
+  // Fallback for single-turn threads or legacy rollouts that only emit token_count (no token_usage_record)
+  if (matched === 0 && allTurnsCount <= 1 && sessionUsage) {
+    return {
+      total_tokens: sessionUsage.total_tokens,
+      input_tokens: sessionUsage.input_tokens,
+      cached_input_tokens: sessionUsage.cached_input_tokens,
+    };
+  }
+
+  return {
+    total_tokens: totalTokens,
+    input_tokens: inputTokens,
+    cached_input_tokens: cachedInputTokens,
   };
 }
 
@@ -871,13 +1201,30 @@ export async function readLiveWorkflowState({
     `).all();
 
     if (!candidateThreads.length) {
-      return buildHookOnlyPayload(hookEvents, { session_id: session_id || preferred_session_id, limit, nowMs });
+      return buildHookOnlyPayload(hookEvents, {
+        session_id: session_id || preferred_session_id,
+        scope: normalizedScope,
+        limit,
+        nowMs,
+      });
     }
+
+    // Detect optional byte-offset columns in thread_turns for older/newer Codex schema compatibility
+    let hasTurnByteOffsets = false;
+    if (historyDb) {
+      try {
+        const cols = new Set(historyDb.prepare('PRAGMA table_info(thread_turns)').all().map(c => c.name));
+        hasTurnByteOffsets = cols.has('rollout_byte_offset') && cols.has('rollout_end_byte_offset');
+      } catch {
+        hasTurnByteOffsets = false;
+      }
+    }
+    const turnByteColsSql = hasTurnByteOffsets ? ', rollout_byte_offset, rollout_end_byte_offset' : '';
 
     // Prepare reusable queries
     const latestTurnStmt = historyDb
       ? historyDb.prepare(`
-          SELECT turn_id, status, started_at, completed_at, duration_ms
+          SELECT turn_id, status, started_at, completed_at, duration_ms${turnByteColsSql}
           FROM thread_turns
           WHERE thread_id = ?
           ORDER BY rollout_ordinal DESC
@@ -930,6 +1277,9 @@ export async function readLiveWorkflowState({
         `).get(session_id);
         if (directRow) {
           const latestTurn = latestTurnStmt ? latestTurnStmt.get(directRow.id) : null;
+          const childRow = childCountStmt.get(directRow.id);
+          const directUpdatedMs = Number(directRow.updated_at_ms || 0);
+          const directLatestTs = Math.max(directUpdatedMs, normalizeTurnStartedMs(latestTurn));
           selectedEntry = {
             thread: directRow,
             latestTurn,
@@ -937,9 +1287,9 @@ export async function readLiveWorkflowState({
             model: directRow.model || 'gpt-6.2-sol',
             model_display: formatModelDisplayName(directRow.model || 'gpt-6.2-sol'),
             reasoning_effort: directRow.reasoning_effort || '',
-            is_running: Boolean(latestTurn?.status === 'inProgress' && (nowMs - Number(directRow.updated_at_ms || 0)) < ACTIVE_TURN_FRESHNESS_MS),
-            updated_at_ms: Number(directRow.updated_at_ms || 0),
-            subagent_count: 0,
+            is_running: Boolean(latestTurn?.status === 'inProgress' && (nowMs - directLatestTs) < ACTIVE_TURN_FRESHNESS_MS),
+            updated_at_ms: directUpdatedMs,
+            subagent_count: Number(childRow?.c || 0),
             tokens_used: Number(directRow.tokens_used || 0),
             source: 'codex-sqlite',
           };
@@ -960,7 +1310,7 @@ export async function readLiveWorkflowState({
     // 3. Query turns for active thread
     const turns = historyDb
       ? historyDb.prepare(`
-          SELECT turn_id, status, started_at, completed_at, duration_ms
+          SELECT turn_id, status, started_at, completed_at, duration_ms${turnByteColsSql}
           FROM thread_turns
           WHERE thread_id = ?
           ORDER BY rollout_ordinal ASC
@@ -985,22 +1335,33 @@ export async function readLiveWorkflowState({
       }
     }
 
+    const latestTurnCompletedMs = normalizeTurnCompletedMs(latestTurn);
+    const rolloutAheadOfDb = Boolean(
+      primaryTurnRunning &&
+      latestTurn &&
+      latestTurn.status !== 'inProgress' &&
+      primaryRollout.lastTaskStartedMs > latestTurnCompletedMs
+    );
     const currentTurnStartedMs = primaryTurnRunning
-      ? (normalizeTurnStartedMs(latestTurn) || primaryRollout.lastTaskStartedMs || Number(activeThread.updated_at_ms || nowMs))
+      ? (rolloutAheadOfDb
+          ? primaryRollout.lastTaskStartedMs
+          : (normalizeTurnStartedMs(latestTurn) || primaryRollout.lastTaskStartedMs || Number(activeThread.updated_at_ms || nowMs)))
       : normalizeTurnStartedMs(latestTurn);
     const currentTurnElapsedMs = primaryTurnRunning
       ? Math.max(0, nowMs - currentTurnStartedMs)
-      : (Number(latestTurn?.duration_ms || 0) || (latestTurn?.completed_at && latestTurn?.started_at ? Math.max(0, normalizeTurnCompletedMs(latestTurn) - normalizeTurnStartedMs(latestTurn)) : 0));
+      : (Number(latestTurn?.duration_ms || 0) || (latestTurn?.completed_at && latestTurn?.started_at ? Math.max(0, latestTurnCompletedMs - normalizeTurnStartedMs(latestTurn)) : 0));
 
-    if (primaryTurnRunning && latestTurn && !latestTurn.duration_ms) {
+    if (primaryTurnRunning && (!latestTurn || rolloutAheadOfDb || (!latestTurn.duration_ms && !latestTurn.completed_at))) {
       totalRuntimeMs += currentTurnElapsedMs;
     }
 
     // 4. Query primary thread items (safe JSON fields extracted in SQLite — zero private text!)
     const capMap = createCapabilityMap();
+    const dbInFlightByCap = {};
     const rawEvents = [];
     const subActivityStats = new Map();
-    let primaryToolTotal = 0;
+    let primaryToolDone = 0;
+    let primaryDbInFlightTools = 0;
     let primaryToolCompleted = 0;
     let currentTurnItemsTotal = 0;
     let currentTurnItemsCompleted = 0;
@@ -1066,8 +1427,12 @@ export async function readLiveWorkflowState({
         const itemDone = row.item_status !== 'inProgress' && (row.completed_at_ms !== null || row.item_status === 'completed' || row.item_status === 'failed' || !primaryTurnRunning);
 
         if (isToolItem) {
-          primaryToolTotal++;
-          if (itemDone) primaryToolCompleted++;
+          if (!itemDone && primaryTurnRunning) {
+            primaryDbInFlightTools++;
+          } else {
+            primaryToolDone++;
+            if (row.item_status !== 'failed') primaryToolCompleted++;
+          }
         }
         if (isCurrentTurn) {
           currentTurnItemsTotal++;
@@ -1079,6 +1444,7 @@ export async function readLiveWorkflowState({
           const dur = Number(row.duration_ms || 0) || (row.started_at_ms && row.completed_at_ms ? Math.max(0, row.completed_at_ms - row.started_at_ms) : 0);
           const ts = Number(row.completed_at_ms || row.started_at_ms || row.created_at_ms || 0);
           if (!itemDone && primaryTurnRunning) {
+            dbInFlightByCap[capId] = (dbInFlightByCap[capId] || 0) + 1;
             c.in_flight++;
           } else {
             c.count++;
@@ -1093,7 +1459,8 @@ export async function readLiveWorkflowState({
           } else if (row.tool_name) {
             c.last_tool = row.tool_name;
           } else if (row.item_type === 'commandExecution') {
-            c.last_tool = row.cmd_action === 'read' ? 'read/search' : 'exec';
+            const ca = String(row.cmd_action || '').toLowerCase();
+            c.last_tool = ['read', 'search', 'listfiles'].includes(ca) ? 'read/search' : 'exec';
           } else if (row.item_type === 'fileChange') {
             c.last_tool = 'patch';
           }
@@ -1104,39 +1471,57 @@ export async function readLiveWorkflowState({
       }
     }
 
-    // Overlay live in-flight rollout calls onto capabilities
-    let primaryInFlightToolsCount = 0;
+    // Overlay live in-flight rollout calls onto capabilities without double-counting SQLite inProgress items
+    let rolloutInFlightToolsCount = 0;
+    const rolloutInFlightByCap = {};
     const primaryInFlightNames = [];
     for (const call of primaryRollout.inFlightCalls) {
       if (call.is_subagent_wait) continue;
-      primaryInFlightToolsCount++;
+      rolloutInFlightToolsCount++;
       primaryInFlightNames.push(call.tool_name);
       if (call.capability && capMap[call.capability]) {
-        capMap[call.capability].in_flight++;
+        rolloutInFlightByCap[call.capability] = (rolloutInFlightByCap[call.capability] || 0) + 1;
         capMap[call.capability].last_tool = call.tool_name;
         capMap[call.capability].last_timestamp_ms = Math.max(capMap[call.capability].last_timestamp_ms, call.timestamp_ms || nowMs);
       }
     }
+    for (const [capId, rCnt] of Object.entries(rolloutInFlightByCap)) {
+      capMap[capId].in_flight = Math.max(dbInFlightByCap[capId] || 0, rCnt);
+    }
+    const primaryInFlightToolsCount = Math.max(primaryDbInFlightTools, rolloutInFlightToolsCount);
+    const primaryToolTotal = primaryToolDone + primaryInFlightToolsCount;
 
-    // 5. Discover ALL dynamically spawned subagents for the selected thread
+    // 5. Discover ALL dynamically spawned subagents (including nested descendants) for the selected thread
     const childRows = stateDb.prepare(`
+      WITH RECURSIVE descendants(thread_id, depth) AS (
+        SELECT child_thread_id, 1 FROM thread_spawn_edges WHERE parent_thread_id = ?
+        UNION
+        SELECT id, 1 FROM threads
+        WHERE thread_source = 'subagent' AND source LIKE ?
+        UNION
+        SELECT e.child_thread_id, d.depth + 1
+        FROM thread_spawn_edges e
+        JOIN descendants d ON e.parent_thread_id = d.thread_id
+        WHERE d.depth < 6
+      )
       SELECT DISTINCT
         t.id, t.rollout_path, t.model, t.reasoning_effort, t.agent_nickname,
         t.agent_role, t.agent_path, t.tokens_used, t.created_at_ms, t.updated_at_ms,
         t.source, t.thread_source,
-        e.status AS edge_status
-      FROM threads t
-      LEFT JOIN thread_spawn_edges e
-        ON e.child_thread_id = t.id AND e.parent_thread_id = ?
-      WHERE e.parent_thread_id = ?
-         OR (t.thread_source = 'subagent' AND t.source LIKE ?)
+        COALESCE(e.status, 'open') AS edge_status
+      FROM descendants d
+      JOIN threads t ON t.id = d.thread_id
+      LEFT JOIN thread_spawn_edges e ON e.child_thread_id = t.id
+      WHERE t.id != ?
       ORDER BY t.created_at_ms ASC
-    `).all(activeThreadId, activeThreadId, `%"parent_thread_id":"${activeThreadId}"%`);
+    `).all(activeThreadId, `%"parent_thread_id":"${activeThreadId}"%`, activeThreadId);
 
     const subagents = [];
+    let allSubagentsSessionTokens = 0;
+
     const childTurnsStmt = historyDb
       ? historyDb.prepare(`
-          SELECT turn_id, root_turn_id, status, started_at, completed_at, duration_ms
+          SELECT turn_id, root_turn_id, status, started_at, completed_at, duration_ms${turnByteColsSql}
           FROM thread_turns
           WHERE thread_id = ?
           ORDER BY rollout_ordinal ASC
@@ -1147,7 +1532,10 @@ export async function readLiveWorkflowState({
       ? historyDb.prepare(`
           SELECT
             COUNT(*) AS total_items,
-            SUM(CASE WHEN item_type IN ('commandExecution','fileChange','mcpToolCall','webSearch','imageView','imageGeneration','dynamicToolCall') THEN 1 ELSE 0 END) AS tool_calls,
+            SUM(CASE WHEN item_type IN ('commandExecution','fileChange','mcpToolCall','webSearch','imageView','imageGeneration','dynamicToolCall')
+                      AND NOT (completed_at_ms IS NULL AND json_extract(item_json, '$.status') = 'inProgress') THEN 1 ELSE 0 END) AS done_tool_calls,
+            SUM(CASE WHEN item_type IN ('commandExecution','fileChange','mcpToolCall','webSearch','imageView','imageGeneration','dynamicToolCall')
+                      AND completed_at_ms IS NULL AND json_extract(item_json, '$.status') = 'inProgress' THEN 1 ELSE 0 END) AS in_progress_tool_calls,
             SUM(CASE WHEN completed_at_ms IS NOT NULL THEN 1 ELSE 0 END) AS completed_items,
             MAX(COALESCE(completed_at_ms, started_at_ms, created_at_ms)) AS last_item_ms
           FROM thread_items
@@ -1182,14 +1570,21 @@ export async function readLiveWorkflowState({
       const chTurns = isTurnScope
         ? allChTurns.filter(tr => tr.root_turn_id === activeTurnId)
         : allChTurns;
+      const spawnedDuringActiveTurn = Boolean(
+        isTurnScope &&
+        currentTurnStartedMs > 0 &&
+        Number(ch.created_at_ms || 0) >= currentTurnStartedMs - 2000 &&
+        allChTurns.length === 0
+      );
 
       // In 'turn' scope, skip subagents that were not invoked or active during the current turn
-      if (isTurnScope && chTurns.length === 0 && !actStat) {
+      if (isTurnScope && chTurns.length === 0 && !actStat && !spawnedDuringActiveTurn) {
+        allSubagentsSessionTokens += Number(ch.tokens_used || 0);
         continue;
       }
 
       const chLastTurn = chTurns.at(-1) || null;
-      const chRollout = inspectRolloutTail(ch.rollout_path, 96 * 1024);
+      const chRollout = inspectRolloutTail(ch.rollout_path, 128 * 1024);
       const chRunning = isThreadRunningNow(chLastTurn, ch.updated_at_ms, chRollout, nowMs);
 
       let chAgg = null;
@@ -1201,7 +1596,10 @@ export async function readLiveWorkflowState({
           chAgg = historyDb.prepare(`
             SELECT
               COUNT(*) AS total_items,
-              SUM(CASE WHEN item_type IN ('commandExecution','fileChange','mcpToolCall','webSearch','imageView','imageGeneration','dynamicToolCall') THEN 1 ELSE 0 END) AS tool_calls,
+              SUM(CASE WHEN item_type IN ('commandExecution','fileChange','mcpToolCall','webSearch','imageView','imageGeneration','dynamicToolCall')
+                        AND NOT (completed_at_ms IS NULL AND json_extract(item_json, '$.status') = 'inProgress') THEN 1 ELSE 0 END) AS done_tool_calls,
+              SUM(CASE WHEN item_type IN ('commandExecution','fileChange','mcpToolCall','webSearch','imageView','imageGeneration','dynamicToolCall')
+                        AND completed_at_ms IS NULL AND json_extract(item_json, '$.status') = 'inProgress' THEN 1 ELSE 0 END) AS in_progress_tool_calls,
               SUM(CASE WHEN completed_at_ms IS NOT NULL THEN 1 ELSE 0 END) AS completed_items,
               MAX(COALESCE(completed_at_ms, started_at_ms, created_at_ms)) AS last_item_ms
             FROM thread_items
@@ -1246,11 +1644,20 @@ export async function readLiveWorkflowState({
         }
       }
 
+      const chLastCompletedMs = normalizeTurnCompletedMs(chLastTurn);
+      const chRolloutAhead = Boolean(
+        chRunning &&
+        chLastTurn &&
+        chLastTurn.status !== 'inProgress' &&
+        chRollout.lastTaskStartedMs > chLastCompletedMs
+      );
       const chStartedMs = chRunning
-        ? (normalizeTurnStartedMs(chLastTurn) || chRollout.lastTaskStartedMs || Number(ch.updated_at_ms || nowMs))
+        ? (chRolloutAhead
+            ? chRollout.lastTaskStartedMs
+            : (normalizeTurnStartedMs(chLastTurn) || chRollout.lastTaskStartedMs || Number(ch.updated_at_ms || nowMs)))
         : normalizeTurnStartedMs(chLastTurn);
       const chActiveElapsedMs = chRunning ? Math.max(0, nowMs - chStartedMs) : 0;
-      if (chRunning && chLastTurn && !chLastTurn.duration_ms) {
+      if (chRunning && (!chLastTurn || chRolloutAhead || (!chLastTurn.duration_ms && !chLastTurn.completed_at))) {
         chTotalDurMs += chActiveElapsedMs;
       }
 
@@ -1260,18 +1667,24 @@ export async function readLiveWorkflowState({
       const chFamily = inferModelFamily(chModel, ch.agent_role);
       const chState = chRunning
         ? 'running'
-        : (chLastTurn?.status === 'failed' || chLastTurn?.status === 'interrupted' ? 'failed' : (chTurns.length > 0 ? 'done' : 'idle'));
+        : (chLastTurn?.status === 'failed'
+            ? 'failed'
+            : (chLastTurn?.status === 'interrupted'
+                ? 'interrupted'
+                : (chTurns.length > 0 || (actStat?.completed || 0) > 0 ? 'done' : 'idle')));
 
       const invocations = Math.max(
         chTurns.length,
         actStat ? (actStat.started + actStat.interacted) : 0,
         1
       );
-      const toolCalls = Number(chAgg?.tool_calls || 0) + chRollout.inFlightCalls.length;
+      const chNonSubInFlightCalls = chRollout.inFlightCalls.filter(c => !c.is_subagent_wait);
+      const toolCalls = Number(chAgg?.done_tool_calls || 0) +
+        Math.max(Number(chAgg?.in_progress_tool_calls || 0), chNonSubInFlightCalls.length);
 
       let completionPct = 0;
       if (chState === 'done') completionPct = 100;
-      else if (chState === 'failed') {
+      else if (chState === 'failed' || chState === 'interrupted') {
         completionPct = chTurns.length > 0 ? Math.round((chCompletedTurns / chTurns.length) * 100) : 0;
       } else if (chRunning) {
         const doneTurnsRatio = chTurns.length > 1 ? (chCompletedTurns / chTurns.length) : 0;
@@ -1279,13 +1692,13 @@ export async function readLiveWorkflowState({
         completionPct = Math.max(15, Math.min(92, Math.round((doneTurnsRatio * 0.5 + itemBonus) * 100) || 28));
       }
 
-      const inFlightToolNames = chRollout.inFlightCalls.map(c => c.tool_name).filter(Boolean);
+      const inFlightToolNames = chNonSubInFlightCalls.map(c => c.tool_name).filter(Boolean);
       let currentActivity = '待機中';
       if (chRunning) {
         if (inFlightToolNames.length > 0) currentActivity = `執行工具：${inFlightToolNames.join(', ')}`;
         else currentActivity = '深度推理與分析中';
-      } else if (chState === 'failed') {
-        currentActivity = '回合中止或失敗';
+      } else if (chState === 'failed' || chState === 'interrupted') {
+        currentActivity = chState === 'interrupted' ? '回合已中斷' : '回合中止或失敗';
       } else if (chState === 'done') {
         currentActivity = `已完成 · ${toolCalls} 次工具呼叫`;
       }
@@ -1296,9 +1709,12 @@ export async function readLiveWorkflowState({
         if (ev) rawEvents.push(ev);
       }
 
-      const chTurnTokens = isTurnScope
-        ? chTurns.reduce((acc, tr) => acc + Number(chRollout.turnTokensByTurnId?.[tr.turn_id] || 0), 0)
-        : Number(ch.tokens_used || 0);
+      const chSessionUsage = resolveSessionTokenUsage(ch.tokens_used, chRollout);
+      allSubagentsSessionTokens += chSessionUsage.total_tokens;
+      const chScopedUsage = isTurnScope
+        ? resolveTurnTokenUsage(ch.rollout_path, chRollout, chTurns, allChTurns.length, chSessionUsage)
+        : chSessionUsage;
+      const chCacheHitRatePct = computeCacheHitRatePct(chScopedUsage.input_tokens, chScopedUsage.cached_input_tokens);
 
       subagents.push({
         id: ch.id,
@@ -1321,7 +1737,11 @@ export async function readLiveWorkflowState({
         completion_pct: completionPct,
         elapsed_ms: chTotalDurMs,
         current_turn_started_ms: chRunning ? chStartedMs : 0,
-        tokens_used: chTurnTokens,
+        tokens_used: chScopedUsage.total_tokens,
+        session_tokens_used: chSessionUsage.total_tokens,
+        input_tokens: chScopedUsage.input_tokens,
+        cached_input_tokens: chScopedUsage.cached_input_tokens,
+        cache_hit_rate_pct: chCacheHitRatePct,
         current_activity: currentActivity,
         in_flight_tools: inFlightToolNames,
         updated_at_ms: Number(ch.updated_at_ms || 0),
@@ -1377,11 +1797,11 @@ export async function readLiveWorkflowState({
 
     const capabilities = finalizeCapabilities(capMap, nowMs);
 
-    // Compute honest completion percentage for primary model
+    // Legacy completion_pct retained for backward API compatibility
     let completionPct = 0;
     if (!primaryIsRunning) {
       if (turns.length > 0) {
-        completionPct = latestTurn?.status === 'failed'
+        completionPct = (latestTurn?.status === 'failed' || latestTurn?.status === 'interrupted')
           ? Math.round((turnsCompleted / Math.max(1, turns.length)) * 100)
           : 100;
       }
@@ -1435,11 +1855,21 @@ export async function readLiveWorkflowState({
     const scopedTurnsCompleted = isTurnScope ? (latestTurn?.status === 'completed' ? 1 : 0) : turnsCompleted;
     const scopedTurnsFailed = isTurnScope ? ((latestTurn?.status === 'failed' || latestTurn?.status === 'interrupted') ? 1 : 0) : turnsFailed;
     const scopedRuntimeMs = isTurnScope ? currentTurnElapsedMs : totalRuntimeMs;
-    const totalTokensSession = Math.max(Number(activeThread.tokens_used || 0), primaryRollout.lastTokenTotal || 0);
-    const scopedTokens = isTurnScope
-      ? Number(primaryRollout.turnTokensByTurnId?.[activeTurnId] || 0)
-      : totalTokensSession;
-    const primaryInvocations = primaryToolTotal + primaryInFlightToolsCount + scopedTurnsTotal;
+
+    const primarySessionUsage = resolveSessionTokenUsage(activeThread.tokens_used, primaryRollout);
+    const primaryScopedUsage = isTurnScope
+      ? resolveTurnTokenUsage(activeThread.rollout_path, primaryRollout, latestTurn ? [latestTurn] : [], turns.length, primarySessionUsage)
+      : primarySessionUsage;
+    const primaryCacheHitRatePct = computeCacheHitRatePct(primaryScopedUsage.input_tokens, primaryScopedUsage.cached_input_tokens);
+
+    const subagentsTokensUsed = subagents.reduce((acc, s) => acc + Number(s.tokens_used || 0), 0);
+    const totalTokensUsed = primaryScopedUsage.total_tokens + subagentsTokensUsed;
+    const sessionTotalTokensUsed = primarySessionUsage.total_tokens + allSubagentsSessionTokens;
+    const totalInputTokens = primaryScopedUsage.input_tokens + subagents.reduce((acc, s) => acc + Number(s.input_tokens || 0), 0);
+    const totalCachedInputTokens = primaryScopedUsage.cached_input_tokens + subagents.reduce((acc, s) => acc + Number(s.cached_input_tokens || 0), 0);
+    const combinedCacheHitRatePct = computeCacheHitRatePct(totalInputTokens, totalCachedInputTokens);
+
+    const primaryInvocations = primaryToolTotal + scopedTurnsTotal;
     const totalInvocations = primaryInvocations + subagents.reduce((acc, s) => acc + s.invocations, 0);
 
     return {
@@ -1463,7 +1893,11 @@ export async function readLiveWorkflowState({
           ? 'waiting_permission'
           : (primaryIsRunning
               ? (waitingSubagent ? 'waiting_subagent' : 'running')
-              : (latestTurn?.status === 'failed' ? 'failed' : (turns.length > 0 ? 'done' : 'idle'))),
+              : (latestTurn?.status === 'failed'
+                  ? 'failed'
+                  : (latestTurn?.status === 'interrupted'
+                      ? 'interrupted'
+                      : (turns.length > 0 ? 'done' : 'idle')))),
         is_running: primaryIsRunning,
         current_phase: currentPhase,
         turns_total: scopedTurnsTotal,
@@ -1472,17 +1906,20 @@ export async function readLiveWorkflowState({
         turn_index: turns.length,
         session_turns_total: turns.length,
         turns_in_progress: primaryTurnRunning ? 1 : 0,
-        tool_calls_total: primaryToolTotal + primaryInFlightToolsCount,
+        tool_calls_total: primaryToolTotal,
         tool_calls_completed: primaryToolCompleted,
         tool_calls_in_flight: primaryInFlightToolsCount,
         invocations: primaryInvocations,
         completion_pct: completionPct,
+        input_tokens: primaryScopedUsage.input_tokens,
+        cached_input_tokens: primaryScopedUsage.cached_input_tokens,
+        cache_hit_rate_pct: primaryCacheHitRatePct,
         current_turn_started_ms: primaryTurnRunning ? currentTurnStartedMs : 0,
         current_turn_elapsed_ms: currentTurnElapsedMs,
         total_runtime_ms: scopedRuntimeMs,
         session_total_runtime_ms: totalRuntimeMs,
-        tokens_used: scopedTokens,
-        session_tokens_used: totalTokensSession,
+        tokens_used: primaryScopedUsage.total_tokens,
+        session_tokens_used: primarySessionUsage.total_tokens,
         context_window_tokens: primaryRollout.contextWindowTokens || 0,
         pending_permission: pendingPermission,
       },
@@ -1497,6 +1934,13 @@ export async function readLiveWorkflowState({
         running_subagents: runningSubagents.length,
         total_invocations: totalInvocations,
         total_runtime_ms: scopedRuntimeMs,
+        primary_tokens_used: primaryScopedUsage.total_tokens,
+        subagents_tokens_used: subagentsTokensUsed,
+        total_tokens_used: totalTokensUsed,
+        session_total_tokens_used: sessionTotalTokensUsed,
+        total_input_tokens: totalInputTokens,
+        total_cached_input_tokens: totalCachedInputTokens,
+        cache_hit_rate_pct: combinedCacheHitRatePct,
         session_ended: !primaryIsRunning,
         has_data: turns.length > 0 || capabilities.some(c => c.used) || subagents.length > 0,
       },

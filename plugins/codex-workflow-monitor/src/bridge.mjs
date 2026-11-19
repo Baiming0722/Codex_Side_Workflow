@@ -1,13 +1,15 @@
 import { App } from '@modelcontextprotocol/ext-apps';
 
 const app = new App(
-  { name: 'codex-workflow-monitor', version: '0.3.2' },
+  { name: 'codex-workflow-monitor', version: '0.3.3' },
   {},
   { autoResize: true }
 );
 
 const POLL_INTERVAL_MS = 1500;
 let polling = false;
+let pendingRepoll = false;
+let pollSeq = 0;
 let pollTimer = null;
 let selectedSessionId = '__auto__';
 let selectedScope = 'session';
@@ -58,8 +60,13 @@ async function callHostTool(name, args) {
 }
 
 async function poll() {
-  if (polling || document.hidden) return;
+  if (document.hidden) return;
+  if (polling) {
+    pendingRepoll = true;
+    return;
+  }
   polling = true;
+  const reqSeq = ++pollSeq;
   try {
     const args = {
       session_id: selectedSessionId || '__auto__',
@@ -68,22 +75,39 @@ async function poll() {
     };
     const result = await callHostTool('read_workflow_events', args);
     const payload = unpack(result);
-    if (payload) {
+    if (payload && reqSeq === pollSeq) {
       deliverState(payload);
     }
   } catch (error) {
-    const banner = document.getElementById('modeText');
-    if (banner) banner.textContent = '重連中…';
+    if (reqSeq === pollSeq) {
+      const banner = document.getElementById('modeText');
+      if (banner) banner.textContent = '重連中…';
+    }
     console.error('Codex Workflow Monitor poll failed:', error);
   } finally {
     polling = false;
+    if (pendingRepoll && !document.hidden) {
+      pendingRepoll = false;
+      void poll();
+    }
+  }
+}
+
+function triggerImmediatePoll() {
+  pollSeq++;
+  if (polling) {
+    pendingRepoll = true;
+  } else {
+    void poll();
   }
 }
 
 function startPolling() {
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(() => {
-    void poll();
+    if (!polling && !document.hidden) {
+      void poll();
+    }
   }, POLL_INTERVAL_MS);
 }
 
@@ -102,7 +126,7 @@ document.addEventListener('visibilitychange', () => {
 
 window.selectWorkflowSession = function (sessionId) {
   selectedSessionId = sessionId || '__auto__';
-  void poll();
+  triggerImmediatePoll();
 };
 
 window.selectWorkflowScope = function (scope) {
@@ -110,17 +134,17 @@ window.selectWorkflowScope = function (scope) {
   try {
     window.localStorage?.setItem('codex_wf_scope', selectedScope);
   } catch {}
-  void poll();
+  triggerImmediatePoll();
 };
 
 window.requestRefreshWorkflow = function () {
-  void poll();
+  triggerImmediatePoll();
 };
 
 window.requestClearWorkflowEvents = async function () {
   try {
     await callHostTool('clear_workflow_events', {});
-    void poll();
+    triggerImmediatePoll();
   } catch (error) {
     console.error('清空 Hook 紀錄失敗:', error);
   }
@@ -132,6 +156,13 @@ app.ontoolinput = params => {
     const sid = params?.arguments?.session_id;
     if (typeof sid === 'string' && sid.trim()) {
       selectedSessionId = sid.trim();
+    }
+    const sc = params?.arguments?.scope;
+    if (sc === 'turn' || sc === 'session') {
+      selectedScope = sc;
+      try {
+        window.localStorage?.setItem('codex_wf_scope', selectedScope);
+      } catch {}
     }
   } catch {}
 };

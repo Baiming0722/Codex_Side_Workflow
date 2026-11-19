@@ -9,7 +9,7 @@ import { readLiveWorkflowState, clearHookEventsLog } from './telemetry.mjs';
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const RESOURCE_URI = 'ui://codex-workflow/monitor.html';
-export const PLUGIN_VERSION = '0.3.2';
+export const PLUGIN_VERSION = '0.3.3';
 
 let hostPreferredSessionId = '';
 
@@ -115,7 +115,7 @@ registerAppTool(
   'open_workflow_monitor',
   {
     title: 'Codex Workflow',
-    description: '在對話側邊分頁（Thread Side Panel）或全域側邊欄開啟繁體中文的 Codex 即時工作流監控介面。單模型與多子代理模式皆隨時可用，僅發光顯示正在運行的模型、功能模組與子代理，並即時呈現完成度、調用次數與運行時間。',
+    description: '在對話側邊分頁（Thread Side Panel）或全域側邊欄開啟繁體中文的 Codex 即時工作流監控介面。單模型與多子代理模式皆隨時可用，僅發光顯示正在運行的模型、功能模組與子代理，並即時呈現緩存命中率、調用次數、總 Token 消耗與運行時間。',
     inputSchema: {
       session_id: z.string().optional().describe('選填：指定要顯示的工作階段 thread / session ID；未指定時自動鎖定目前對話或最新運行中的工作階段。'),
       scope: z.enum(['session', 'turn']).optional().describe('選填：統計範圍，session（整個對話）或 turn（當前輪次），預設 session。'),
@@ -159,7 +159,7 @@ server.registerTool(
   'read_workflow_events',
   {
     title: '讀取 Codex 即時運行狀態與事件',
-    description: '唯讀取得目前 Codex 工作階段的即時模型狀態、啟用的功能模組、動態子代理（若有調用）、完成度、調用次數、運行時間與安全事件紀錄（不含對話內容、參數或機密）。',
+    description: '唯讀取得目前 Codex 工作階段的即時模型狀態、啟用的功能模組、動態子代理（若有調用）、緩存命中率、調用次數、總 Token 消耗（主代理與子代理加總）、運行時間與安全事件紀錄（不含對話內容、參數或機密）。',
     inputSchema: {
       session_id: z.string().optional().describe('選填：指定工作階段 ID；留空或傳入 __auto__ 時自動追蹤當前或最新運行中的工作階段。'),
       scope: z.enum(['session', 'turn']).optional().describe('選填：統計範圍，session（整個對話）或 turn（當前輪次），預設 session。'),

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "codex-workflow-monitor",
+  "version": "0.3.2",
+  "description": "以繁體中文在 ChatGPT Desktop／Codex 側邊欄即時監控單模型與多子代理工作流，僅發光顯示正在運行的模型、功能模組與子代理，並呈現完成度、調用次數與運行時間。",
+  "author": {
+    "name": "Baiming & GPT & Gemini"
+  },
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "workflow",
+    "monitor",
+    "subagents",
+    "hooks"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Codex 工作流監控",
+        "shortDescription": "即時模型、功能與動態子代理狀態監控",
+        "longDescription": "隨時可用的動態工作流側邊監控介面。無論單獨使用單一模型（例如 GPT-6.2-Sol）或派發多個子代理，均即時讀取本機 Codex 工作階段狀態與已授權 Hook 中繼資料，只發光顯示正在運行的部分並提供完成度、調用次數與運行時間。",
+        "developerName": "Baiming & GPT & Gemini",
+        "category": "Productivity",
+        "capabilities": [
+          "Interactive",
+          "Read"
+        ],
+        "defaultPrompt": [
+          "開啟 Codex 工作流監控介面",
+          "讀取目前工作階段的 Codex 執行事件"
+        ],
+        "brandColor": "#8367C5",
+        "brandColorDark": "#B19AFE"
+      },
+      "hooks": "./hooks/hooks.json"
+    }
+  }
+}

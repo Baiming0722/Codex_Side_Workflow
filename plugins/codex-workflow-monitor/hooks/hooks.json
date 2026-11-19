@@ -1,0 +1,173 @@
+{
+  "description": "僅記錄必要事件中繼資料（含代理角色、模型名稱、工具名稱與耗時配對 ID）；不保存工具參數、輸出、對話本文或機密資訊。",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${PLUGIN_ROOT}/hooks/record_event.py\"",
+            "timeout": 3,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${PLUGIN_ROOT}/hooks/record_event.py\"",
+            "timeout": 3,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${PLUGIN_ROOT}/hooks/record_event.py\"",
+            "timeout": 3,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PreModelRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${PLUGIN_ROOT}/hooks/record_event.py\"",
+            "timeout": 3,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostModelRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${PLUGIN_ROOT}/hooks/record_event.py\"",
+            "timeout": 3,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${PLUGIN_ROOT}/hooks/record_event.py\"",
+            "timeout": 3,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${PLUGIN_ROOT}/hooks/record_event.py\"",
+            "timeout": 3,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${PLUGIN_ROOT}/hooks/record_event.py\"",
+            "timeout": 3,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${PLUGIN_ROOT}/hooks/record_event.py\"",
+            "timeout": 3,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${PLUGIN_ROOT}/hooks/record_event.py\"",
+            "timeout": 3,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${PLUGIN_ROOT}/hooks/record_event.py\"",
+            "timeout": 3,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${PLUGIN_ROOT}/hooks/record_event.py\"",
+            "timeout": 3,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${PLUGIN_ROOT}/hooks/record_event.py\"",
+            "timeout": 3,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Interrupt": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${PLUGIN_ROOT}/hooks/record_event.py\"",
+            "timeout": 3,
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

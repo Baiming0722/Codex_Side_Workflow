@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Logs and runtime data
+*.log
+npm-debug.log*
+events.jsonl
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Environment and local secrets
+.env
+.env.*
+
+# OS and editor artifacts
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*.bak
+.idea/
+.vscode/
+
+# Python caches
+__pycache__/
+*.py[cod]

@@ -1,0 +1,2269 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Codex｜TUI 數據流工作流監控</title>
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #0b0a18;
+  --win: #121024;
+  --box: #0f0e1ef2;
+  --box-dim: #0c0b18cc;
+  --purple: #b19afe;
+  --cyan: #75d8ff;
+  --gold: #f5bd4f;
+  --green: #63d5a0;
+  --blue: #7aa7ff;
+  --red: #ff717d;
+  --text: #eae8f5;
+  --text-2: #aba4c4;
+  --muted: #6f6a87;
+  --line: #322c4a;
+  --line-dim: #221e35;
+  --mono: 'Cascadia Code', 'JetBrains Mono', 'LXGW WenKai Mono TC', Consolas, 'Microsoft JhengHei', monospace;
+  font-family: var(--mono);
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  min-height: 100%;
+  background: radial-gradient(ellipse at 50% 30%, #201b36 0%, #121024 46%, #090815 90%);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+}
+
+button, select {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+.wrap {
+  max-width: 1080px;
+  margin: 8px auto;
+  padding: 0 8px;
+}
+
+.window {
+  position: relative;
+  border: 1px solid #2b2646;
+  border-radius: 12px;
+  overflow: hidden;
+  background: linear-gradient(150deg, #151229, #0d0c1c 74%);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.72), 0 0 60px rgba(133, 101, 228, 0.12);
+}
+
+.window::before {
+  content: "";
+  position: absolute;
+  inset: 34px 0 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.055;
+  background-image: radial-gradient(#a7a3cf 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+
+/* ── Terminal Title Bar ─────────────────────────────────── */
+.topbar {
+  position: relative;
+  z-index: 4;
+  min-height: 34px;
+  padding: 5px 12px;
+  background: #1f1c38;
+  border-bottom: 1px solid #2f2a4c;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: #a9a3c4;
+  letter-spacing: 0.03em;
+}
+
+.win-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.dots { display: flex; gap: 6px; flex-shrink: 0; }
+.dot { width: 10px; height: 10px; border-radius: 50%; display: block; }
+.dot.r { background: #f76d6b; }
+.dot.y { background: #f1c54d; }
+.dot.g { background: #42c477; }
+.win-path {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.live-ind {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border: 1px solid #393259;
+  background: #16132b;
+  font-size: 10.5px;
+  color: var(--text-2);
+}
+.live-ind[data-state="running"] {
+  border-color: var(--green);
+  color: #c7f9df;
+  box-shadow: 0 0 10px rgba(99, 213, 160, 0.35);
+}
+.live-ind[data-state="waiting"] {
+  border-color: var(--gold);
+  color: #ffe3a3;
+}
+.live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.live-ind[data-state="running"] .live-dot {
+  background: var(--green);
+  box-shadow: 0 0 8px var(--green);
+  animation: blink 1.2s infinite;
+}
+.live-ind[data-state="waiting"] .live-dot {
+  background: var(--gold);
+  box-shadow: 0 0 8px var(--gold);
+  animation: blink 1s infinite;
+}
+
+.top-select, .top-btn {
+  background: #252040;
+  border: 1px solid #473e6a;
+  padding: 2px 7px;
+  font-size: 10.5px;
+  color: #dcd6f2;
+  border-radius: 2px;
+}
+.top-select { max-width: 185px; }
+.top-btn:hover, .top-select:hover {
+  border-color: #7c6bb0;
+  background: #2f2950;
+}
+.top-btn[aria-pressed="true"] {
+  border-color: var(--purple);
+  background: rgba(177, 154, 254, 0.16);
+  color: #fff;
+}
+
+.seg-toggle {
+  display: inline-flex;
+  border: 1px solid #473e6a;
+  background: #17142b;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.seg-btn {
+  background: transparent;
+  border: 0;
+  padding: 2px 8px;
+  font-size: 10.5px;
+  color: #9e97ba;
+  transition: background 0.18s, color 0.18s;
+}
+.seg-btn + .seg-btn {
+  border-left: 1px solid #38305a;
+}
+.seg-btn:hover {
+  color: #e9e5f8;
+  background: rgba(255, 255, 255, 0.05);
+}
+.seg-btn.active {
+  background: rgba(117, 216, 255, 0.18);
+  color: #e9f9ff;
+  font-weight: 700;
+  box-shadow: inset 0 0 8px rgba(117, 216, 255, 0.25);
+}
+
+/* Demo bar (only in standalone preview-zh.html) */
+.demo-bar {
+  display: none;
+  position: relative;
+  z-index: 4;
+  padding: 5px 14px;
+  background: rgba(245, 189, 79, 0.09);
+  border-bottom: 1px dashed rgba(245, 189, 79, 0.45);
+  font-size: 11px;
+  color: #f3d28c;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.demo-bar.show { display: flex; }
+.demo-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.demo-btn {
+  background: #17142b;
+  border: 1px solid rgba(245, 189, 79, 0.4);
+  padding: 2px 8px;
+  font-size: 10.5px;
+  color: #f7e1b5;
+}
+.demo-btn.active {
+  background: rgba(245, 189, 79, 0.24);
+  border-color: var(--gold);
+  color: #fff;
+}
+
+/* ── Header & Legend ────────────────────────────────────── */
+.head {
+  position: relative;
+  z-index: 3;
+  padding: 12px 16px 4px;
+}
+.headline {
+  margin: 0 0 9px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.headline .p { color: var(--purple); }
+.headline .g { color: var(--gold); }
+.headline .c { color: var(--cyan); }
+.headline .gr { color: var(--green); }
+.rule {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #6c5988 18%, #6c5988 82%, transparent);
+  box-shadow: 0 0 8px rgba(131, 103, 197, 0.35);
+}
+.legend {
+  padding: 7px 2px 2px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 10.5px;
+  color: var(--text-2);
+}
+.legend-items {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.legend b {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+.legend .p b { background: var(--purple); }
+.legend .c b { background: var(--cyan); }
+.legend .g b { background: var(--gold); }
+.legend .gr b { background: var(--green); }
+.legend .rightnote { color: var(--muted); }
+
+/* ── TUI Data-Flow Stage ────────────────────────────────── */
+.stage-scroll {
+  position: relative;
+  z-index: 2;
+  padding: 8px 14px 8px;
+  overflow-x: auto;
+}
+
+.diagram {
+  position: relative;
+  min-width: 640px;
+  display: grid;
+  grid-template-columns: 188px minmax(0, 1fr);
+  column-gap: 32px;
+  align-items: stretch;
+}
+
+.diagram[data-hide-advisor="true"] {
+  grid-template-columns: minmax(0, 1fr);
+  column-gap: 0;
+}
+.diagram[data-hide-advisor="true"] .advisor-col {
+  display: none;
+}
+
+/* Dynamic SVG Wires Layer */
+.wires {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1;
+  overflow: visible;
+}
+.wires .w-base {
+  fill: none;
+  stroke: #2c2644;
+  stroke-width: 1.4;
+  opacity: 0.7;
+}
+.wires .w-base.gold { stroke: #6a5226; stroke-dasharray: 4 5; opacity: 0.45; }
+.wires .w-base.purple { stroke: #4e3f73; opacity: 0.65; }
+.wires .w-base.blue { stroke: #31546f; opacity: 0.6; }
+.wires .w-base.dim { opacity: 0.22; }
+
+.wires .w-flow {
+  fill: none;
+  stroke-width: 2.3;
+  stroke-dasharray: 9 9;
+  animation: dashFlow 1.05s linear infinite;
+}
+.wires .w-flow.cyan { stroke: #9be4ff; filter: drop-shadow(0 0 5px #4fcfff); }
+.wires .w-flow.purple { stroke: #ccb8ff; filter: drop-shadow(0 0 6px #a282ff); }
+.wires .w-flow.gold { stroke: #ffd57e; filter: drop-shadow(0 0 6px #f5bd4f); }
+.wires .w-flow.green { stroke: #8ff0c2; filter: drop-shadow(0 0 5px #63d5a0); }
+
+.wires .w-dot.cyan { fill: #d4f6ff; filter: drop-shadow(0 0 6px #75d8ff); }
+.wires .w-dot.purple { fill: #ebe2ff; filter: drop-shadow(0 0 6px #b19afe); }
+.wires .w-dot.gold { fill: #ffeaad; filter: drop-shadow(0 0 6px #f5bd4f); }
+.wires .w-dot.green { fill: #c6ffe3; filter: drop-shadow(0 0 6px #63d5a0); }
+
+/* ── Shared TUI Box Rules (Sharp 0px corners, 3-state illumination) ── */
+.tbox {
+  position: relative;
+  z-index: 2;
+  background: var(--box);
+  border: 1.5px solid var(--line);
+  border-radius: 0;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: border-color 0.24s, box-shadow 0.24s, opacity 0.24s, background 0.24s;
+}
+.tbox:hover {
+  z-index: 6;
+  background: #17142e;
+}
+
+/* Strictly 3 illumination tiers:
+   1) data-illum="running" -> bright neon glow
+   2) data-illum="used"    -> clear matte unlit (NO glow)
+   3) data-illum="unused"  -> dimmed dark unlit */
+.tbox[data-illum="unused"] {
+  background: var(--box-dim);
+  border-color: var(--line-dim);
+  box-shadow: none !important;
+  opacity: 0.28;
+}
+.tbox[data-illum="unused"]:hover {
+  opacity: 0.65;
+}
+.tbox[data-illum="used"] {
+  box-shadow: none !important;
+  opacity: 0.86;
+}
+.tbox[data-illum="used"]:hover {
+  opacity: 1;
+}
+
+/* Accent color variables per TUI node */
+.tbox[data-accent="sol"], .tbox[data-accent="purple"] { --ac: var(--purple); --ac-glow: rgba(177, 154, 254, 0.52); --ac-in: rgba(131, 103, 197, 0.16); }
+.tbox[data-accent="astra"], .tbox[data-accent="gold"] { --ac: var(--gold); --ac-glow: rgba(245, 189, 79, 0.54); --ac-in: rgba(245, 189, 79, 0.14); }
+.tbox[data-accent="luna"], .tbox[data-accent="cyan"] { --ac: var(--cyan); --ac-glow: rgba(117, 216, 255, 0.52); --ac-in: rgba(117, 216, 255, 0.14); }
+.tbox[data-accent="terra"], .tbox[data-accent="green"] { --ac: var(--green); --ac-glow: rgba(99, 213, 160, 0.5); --ac-in: rgba(99, 213, 160, 0.14); }
+.tbox[data-accent="blue"] { --ac: var(--blue); --ac-glow: rgba(122, 167, 255, 0.5); --ac-in: rgba(122, 167, 255, 0.14); }
+
+.tbox[data-illum="running"] {
+  border-color: var(--ac, var(--cyan));
+  box-shadow: 0 0 18px var(--ac-glow), inset 0 0 24px var(--ac-in);
+  opacity: 1;
+}
+.tbox[data-illum="used"] {
+  border-color: color-mix(in srgb, var(--ac, var(--line)) 46%, #241f3a);
+}
+
+/* ── Left Tall Advisor Column (ASTRA) ───────────────────── */
+.advisor-col {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 12px 11px;
+  min-height: 470px;
+}
+.advisor-title {
+  text-align: center;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--gold);
+}
+.advisor-sub {
+  text-align: center;
+  font-size: 10.5px;
+  color: var(--text-2);
+  margin-top: 2px;
+}
+.advisor-banner {
+  margin: 9px 0 10px;
+  padding: 4px 7px;
+  background: rgba(245, 189, 79, 0.12);
+  border-left: 2px solid var(--gold);
+  color: #f3c96e;
+  font-size: 10.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.advisor-col[data-illum="unused"] .advisor-banner {
+  background: rgba(255, 255, 255, 0.03);
+  border-left-color: var(--muted);
+  color: var(--muted);
+}
+
+.advisor-rules {
+  padding-left: 9px;
+  border-left: 1px dashed #6a5329;
+  font-size: 10.5px;
+  color: #9e97b8;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.advisor-col[data-illum="unused"] .advisor-rules {
+  border-left-color: #2f2a45;
+  color: var(--muted);
+}
+.adv-step-title {
+  color: #e4b555;
+  font-weight: 700;
+}
+.advisor-col[data-illum="unused"] .adv-step-title {
+  color: var(--text-2);
+}
+.adv-quote {
+  color: #f4d38a;
+  font-size: 10.5px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.advisor-foot {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(245, 189, 79, 0.22);
+}
+.kv-mini {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 10.5px;
+  color: #9e97b8;
+  margin: 4px 0;
+}
+.kv-mini b {
+  color: #f1eaf8;
+  font-weight: 700;
+}
+.tickmarks {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  height: 10px;
+  margin: 6px 0 7px;
+  border-bottom: 3px solid #26223b;
+}
+.tickmarks i {
+  width: 3px;
+  height: 10px;
+  background: #484068;
+  display: block;
+}
+.tickmarks i.on {
+  background: var(--gold);
+  box-shadow: 0 0 6px rgba(245, 189, 79, 0.6);
+}
+
+/* ── Right Flow Stack ───────────────────────────────────── */
+.right-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  min-width: 0;
+}
+
+/* Top Row: Main Model + Runtime/Usage */
+.top-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.48fr) minmax(195px, 0.92fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.main-box {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 11px 14px;
+}
+.main-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ac, var(--purple));
+  letter-spacing: 0.03em;
+}
+.main-box[data-illum="running"] .main-title {
+  text-shadow: 0 0 14px var(--ac-glow);
+}
+.main-sub {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-2);
+}
+.effort-bars {
+  color: var(--ac, var(--purple));
+  letter-spacing: 1px;
+}
+.main-activity {
+  margin-top: 8px;
+  padding: 5px 9px;
+  background: #1c1833;
+  border: 1px solid #2e284d;
+  color: #d6cff0;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.main-box[data-illum="running"] .main-activity {
+  border-color: color-mix(in srgb, var(--ac, var(--purple)) 55%, transparent);
+  color: #fff;
+}
+.main-progress-row {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10.5px;
+}
+.main-metrics-inline {
+  margin-top: 6px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 10.5px;
+  color: var(--text-2);
+}
+.main-metrics-inline b { color: var(--text); }
+
+/* Runtime / Usage Gold Dashed Box (Video's FRONTIERUSE V2) */
+.usage-box {
+  border-style: dashed;
+  border-width: 1.5px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 10px 12px;
+}
+.usage-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--gold);
+  letter-spacing: 0.06em;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.usage-pill {
+  margin-top: 4px;
+  text-align: center;
+  padding: 3px 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+  background: rgba(245, 189, 79, 0.12);
+  color: #f4cc77;
+  border: 1px solid rgba(245, 189, 79, 0.35);
+}
+.usage-box[data-illum="used"] .usage-pill,
+.usage-box[data-illum="unused"] .usage-pill {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-2);
+  border-color: #342f4f;
+}
+
+/* Middle Green Box: Capabilities & Router Layer (Video's JEV fork layer) */
+.router-box {
+  padding: 10px 13px;
+}
+.router-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+.router-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--green);
+}
+.router-title span {
+  color: var(--text-2);
+  font-weight: 400;
+  font-size: 11px;
+}
+.router-counter {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--green);
+}
+
+.cap-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.cap-row {
+  display: grid;
+  grid-template-columns: 106px minmax(60px, 1fr) 52px 54px 50px;
+  gap: 8px;
+  align-items: center;
+  font-size: 11px;
+  padding: 2px 4px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.cap-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.cap-row[data-running="true"] {
+  background: rgba(99, 213, 160, 0.1);
+  border-color: rgba(99, 213, 160, 0.45);
+  box-shadow: 0 0 10px rgba(99, 213, 160, 0.22);
+}
+.cap-row[data-used="false"] {
+  opacity: 0.32;
+}
+.cap-row-name {
+  color: #cfc9e4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cap-row[data-running="true"] .cap-row-name {
+  color: #fff;
+  font-weight: 700;
+}
+.cap-row-count { text-align: right; color: #dcd6f2; }
+.cap-row-dur { text-align: right; color: var(--text-2); font-size: 10.5px; }
+.cap-row-flag { text-align: right; font-weight: 700; font-size: 10.5px; color: var(--muted); }
+.cap-row[data-running="true"] .cap-row-flag { color: var(--cyan); }
+.cap-row[data-running="false"][data-used="true"] .cap-row-flag { color: var(--green); }
+
+.router-foot {
+  margin-top: 7px;
+  padding-top: 5px;
+  border-top: 1px solid rgba(99, 213, 160, 0.16);
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 10.5px;
+  color: #77cfa9;
+}
+.router-foot span:last-child { color: #9c94b8; }
+
+/* Hatched TUI Progress Bar (Exact Video Style!) */
+.tprog {
+  height: 8px;
+  border: 1px solid #302c49;
+  background:
+    repeating-linear-gradient(120deg, #2d2945 0 2px, transparent 2px 5px),
+    #121327;
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+.tprog > i {
+  display: block;
+  width: 0%;
+  height: 100%;
+  background: var(--cyan);
+  transition: width 0.4s ease;
+}
+.tprog[data-state="running"] > i {
+  background: repeating-linear-gradient(-45deg, var(--bar-color, var(--cyan)) 0 8px, rgba(255,255,255,0.34) 8px 12px, var(--bar-color, var(--cyan)) 12px 20px);
+  background-size: 28px 28px;
+  box-shadow: 0 0 10px var(--bar-glow, rgba(117, 216, 255, 0.65));
+  animation: stripeMove 0.75s linear infinite;
+}
+.tprog[data-state="done"] > i {
+  background: var(--green);
+  opacity: 0.78;
+}
+.tprog[data-state="failed"] > i {
+  background: var(--red);
+  opacity: 0.85;
+}
+
+/* Branch Label Pill between Router and Workers */
+.workers-section {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.workers-section[hidden] { display: none; }
+
+.branch-tag {
+  align-self: center;
+  position: relative;
+  z-index: 3;
+  padding: 2px 11px;
+  background: #100e20;
+  border: 1px solid #373056;
+  color: #b7b0d1;
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+}
+.branch-tag strong { color: var(--cyan); }
+.branch-tag[data-running="true"] {
+  border-color: var(--cyan);
+  color: #e8f8ff;
+  box-shadow: 0 0 10px rgba(117, 216, 255, 0.32);
+}
+
+/* Subagents Worker Grid ([01] [02] [03]...) — single clean TUI row for collision-free orthogonal wires */
+.workers-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--wcols, 3), minmax(132px, 1fr));
+  gap: 10px;
+  padding-top: 12px;
+  width: 100%;
+}
+.workers-grid[data-count="1"] { max-width: 250px; margin: 0 auto; }
+.workers-grid[data-count="2"] { max-width: 460px; margin: 0 auto; }
+
+.worker-box {
+  padding: 13px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 118px;
+}
+.worker-tag {
+  position: absolute;
+  top: -10px;
+  left: 8px;
+  padding: 1px 6px;
+  background: #0e1022;
+  border: 1px solid #3c355b;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.worker-box[data-illum="running"] .worker-tag {
+  color: var(--ac, var(--cyan));
+  border-color: var(--ac, var(--cyan));
+  box-shadow: 0 0 8px var(--ac-glow);
+}
+.worker-box[data-illum="used"] .worker-tag {
+  color: var(--green);
+  border-color: rgba(99, 213, 160, 0.5);
+}
+.worker-box[data-state="failed"] .worker-tag {
+  color: var(--red);
+  border-color: rgba(255, 113, 125, 0.55);
+}
+
+.worker-name {
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.worker-box[data-illum="running"] .worker-name {
+  color: var(--ac, var(--cyan));
+  text-shadow: 0 0 10px var(--ac-glow);
+}
+.worker-model {
+  text-align: center;
+  font-size: 10px;
+  color: #7eaec9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.worker-box[data-illum="unused"] .worker-model { color: var(--muted); }
+
+.worker-prog-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 2px;
+}
+.worker-pct {
+  font-size: 11px;
+  font-weight: 700;
+  min-width: 34px;
+  text-align: right;
+  color: var(--text-2);
+}
+.worker-box[data-illum="running"] .worker-pct { color: var(--ac, var(--cyan)); }
+
+.worker-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text-2);
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+  padding-top: 5px;
+  margin-top: auto;
+}
+.worker-foot .ok { color: var(--green); }
+.worker-foot .err { color: var(--red); }
+
+/* Bottom Return Node + Tilted Stamp */
+.return-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 46px;
+}
+.return-row[hidden] { display: none; }
+
+.return-box {
+  position: relative;
+  min-width: 240px;
+  max-width: 340px;
+  width: 62%;
+  text-align: center;
+  padding: 7px 12px;
+}
+.return-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--purple);
+}
+.return-sub {
+  font-size: 10px;
+  color: var(--text-2);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stamp {
+  position: absolute;
+  right: 8px;
+  top: -11px;
+  z-index: 5;
+  border: 2px solid var(--gold);
+  background: var(--gold);
+  color: #1f1300;
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  padding: 2px 7px;
+  transform: rotate(-4deg);
+  box-shadow: 0 0 14px rgba(245, 189, 79, 0.55);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.stamp[data-visible="false"] {
+  display: none;
+}
+
+/* Single-model quiet TUI banner when user hides unused boxes */
+.single-note {
+  text-align: center;
+  padding: 6px 10px;
+  border: 1px dashed #2c2747;
+  background: rgba(16, 14, 30, 0.55);
+  color: var(--muted);
+  font-size: 10.5px;
+}
+.single-note[hidden] { display: none; }
+
+/* ── Session Log (Video's bottom TUI log box) ───────────── */
+.log-wrap {
+  position: relative;
+  z-index: 3;
+  margin: 10px 14px 0;
+  border: 1px solid #3f3660;
+  background: rgba(11, 10, 22, 0.94);
+}
+.log-label {
+  position: absolute;
+  top: 0;
+  left: 12px;
+  transform: translateY(-54%);
+  padding: 0 7px;
+  background: #100e20;
+  color: #b4accf;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.log-label .live-flag { color: var(--green); }
+.events {
+  max-height: 112px;
+  overflow-y: auto;
+  padding: 10px 12px 7px;
+  scrollbar-color: #4b3e6e #0f0e1f;
+}
+.log-wrap[data-collapsed="true"] .events {
+  display: none;
+}
+.event {
+  display: grid;
+  grid-template-columns: 60px 104px minmax(0, 1fr) auto;
+  gap: 8px;
+  font-size: 10.5px;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+.event .t { color: #74708f; }
+.event .w { font-weight: 700; overflow: hidden; text-overflow: ellipsis; color: var(--purple); }
+.event .w.gold, .event .w.astra { color: var(--gold); }
+.event .w.cyan, .event .w.luna { color: var(--cyan); }
+.event .w.green, .event .w.terra { color: var(--green); }
+.event .w.blue { color: var(--blue); }
+.event .m { color: #d5d0e6; overflow: hidden; text-overflow: ellipsis; }
+.event .d { color: var(--muted); font-size: 10px; }
+
+/* ── Terminal Prompt Footer (Exact Video Bottom) ────────── */
+.footer {
+  position: relative;
+  z-index: 3;
+  padding: 10px 14px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cmd-line {
+  font-size: 11px;
+  color: #a69ec2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cmd-line .prompt { color: var(--gold); font-weight: 700; }
+.cmd-line .bin { color: var(--purple); }
+.cmd-line .flag { color: #8c85ab; }
+.cmd-line .val { color: var(--cyan); }
+.cursor {
+  display: inline-block;
+  width: 7px;
+  height: 11px;
+  background: var(--gold);
+  vertical-align: -1px;
+  margin-left: 4px;
+}
+.cursor.blink { animation: blink 1s steps(2, start) infinite; }
+
+.foot-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.ticker-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.stepline {
+  padding: 2px 7px;
+  background: #2f231f;
+  border-left: 2px solid var(--gold);
+  color: #f4be5f;
+  font-size: 10.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 460px;
+}
+.sq { display: flex; gap: 3px; flex-shrink: 0; }
+.sq i { width: 8px; height: 8px; display: block; background: #26213c; }
+.sq i:nth-child(1) { background: var(--gold); }
+.sq i:nth-child(2) { background: var(--purple); }
+.sq i:nth-child(3) { background: var(--green); }
+.sq i:nth-child(4) { background: var(--cyan); }
+.brand { font-size: 10px; color: var(--muted); }
+
+/* ── Detail Drawer ──────────────────────────────────────── */
+.drawer-bg {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 4, 12, 0.56);
+  z-index: 30;
+  display: none;
+}
+.drawer-bg.show { display: block; }
+.drawer {
+  position: fixed;
+  right: 12px;
+  top: 12px;
+  bottom: 12px;
+  width: min(330px, calc(100vw - 24px));
+  z-index: 31;
+  background: #121024fa;
+  border: 1.5px solid #7562ad;
+  box-shadow: 0 18px 65px rgba(0, 0, 0, 0.8), 0 0 24px rgba(131, 103, 197, 0.28);
+  padding: 15px 16px;
+  display: none;
+  flex-direction: column;
+  gap: 9px;
+  overflow-y: auto;
+}
+.drawer.show { display: flex; }
+.drawer-close {
+  position: absolute;
+  right: 10px;
+  top: 8px;
+  background: none;
+  border: 0;
+  color: var(--text-2);
+  font-size: 18px;
+}
+.drawer h2 { margin: 0; padding-right: 22px; font-size: 14px; color: var(--purple); }
+.drawer p { margin: 0; font-size: 11px; color: var(--text-2); }
+.drawer-sec { font-size: 10.5px; color: #e2daf8; font-weight: 700; margin-top: 4px; letter-spacing: 0.05em; }
+.dkv {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.dkv span { color: var(--muted); white-space: nowrap; }
+.dkv b { text-align: right; color: var(--text); word-break: break-word; }
+.drawer-note {
+  margin-top: auto;
+  padding: 7px 9px;
+  border-left: 2px solid var(--gold);
+  background: rgba(245, 189, 79, 0.07);
+  font-size: 10.5px;
+  color: #ecd095;
+}
+
+@keyframes blink { 50% { opacity: 0.25; } }
+@keyframes dashFlow { to { stroke-dashoffset: -36; } }
+@keyframes stripeMove { to { background-position: 28px 0; } }
+
+@media (max-width: 680px) {
+  .wrap { padding: 0; margin: 0; }
+  .window { border-radius: 0; border-left: 0; border-right: 0; }
+  .brand { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wires .w-flow, .live-dot, .tprog > i, .cursor { animation: none !important; }
+  .wires .w-dot { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="window">
+    <!-- Terminal Topbar -->
+    <div class="topbar">
+      <div class="win-left">
+        <div class="dots"><i class="dot r"></i><i class="dot y"></i><i class="dot g"></i></div>
+        <div class="win-path" id="winPath">~/工作區 — codex + workflow</div>
+      </div>
+      <div class="meta">
+        <span class="live-ind" id="liveInd" data-state="idle"><i class="live-dot"></i><span id="modeText">連接中…</span></span>
+        <div class="seg-toggle" role="group" aria-label="切換統計範圍：對話或輪次">
+          <button class="seg-btn active" id="scopeSessionBtn" data-scope="session" aria-pressed="true" title="顯示目前整個對話（Session）的累計數據">對話</button>
+          <button class="seg-btn" id="scopeTurnBtn" data-scope="turn" aria-pressed="false" title="僅顯示目前當前輪次（Turn）的數據">輪次</button>
+        </div>
+        <select id="sessionSelect" class="top-select" aria-label="選擇監控的工作階段" style="display:none"></select>
+        <button class="top-btn" id="compactBtn" aria-pressed="false" title="切換：熄滅顯示未用節點 / 精簡隱藏未用節點">精簡隱藏</button>
+        <button class="top-btn" id="refreshBtn" title="重新讀取狀態">↻</button>
+      </div>
+    </div>
+
+    <!-- Standalone Preview Bar (strictly hidden inside Codex Desktop) -->
+    <div class="demo-bar" id="demoBar">
+      <span>本機 TUI 預覽模式（非真實 Codex 連線）</span>
+      <div class="demo-btns">
+        <button class="demo-btn active" data-demo="single">單模型 GPT-6.2-Sol</button>
+        <button class="demo-btn" data-demo="multi">呼叫 Subagent 協作</button>
+        <button class="demo-btn" data-demo="idle">全部完成（熄滅）</button>
+      </div>
+    </div>
+
+    <!-- Header & Legend -->
+    <div class="head">
+      <h1 class="headline" id="headline"><span class="p">CODEX 工作流</span> &nbsp;·&nbsp; <span class="g">即時 TUI 數據流監控</span></h1>
+      <div class="rule"></div>
+      <div class="legend">
+        <div class="legend-items">
+          <span class="p"><b></b><span id="legendMain">主模型</span></span>
+          <span class="gr"><b></b>功能／調度層</span>
+          <span class="c"><b></b>子代理 (Subagents)</span>
+          <span class="g"><b></b>顧問／資源監控</span>
+        </div>
+        <span class="rightnote" id="legendRight">CODEX / TUI · LIVE</span>
+      </div>
+    </div>
+
+    <!-- TUI Data-Flow Diagram Stage -->
+    <div class="stage-scroll" id="stageScroll">
+      <div class="diagram" id="diagram" data-hide-advisor="false">
+        <svg class="wires" id="wiresSvg" aria-hidden="true"></svg>
+
+        <!-- Left Tall Gold Column: ASTRA Advisor -->
+        <div class="tbox advisor-col" id="nodeAstra" data-accent="astra" data-illum="unused" tabindex="0" role="button" aria-label="Astra 顧問節點詳情">
+          <div>
+            <div class="advisor-title" id="astraTitle">ASTRA</div>
+            <div class="advisor-sub" id="astraSub">advisor · gpt-6.2-astra</div>
+            <div class="advisor-banner" id="astraBanner">▸ 未觸發 · 待命</div>
+            <div class="advisor-rules">
+              <div><span class="adv-step-title">◆ 規劃鎖定前</span><br>重大架構與邊界把關</div>
+              <div><span class="adv-step-title">◆ 最近狀態</span><br><span class="adv-quote" id="astraQuote">» 尚未呼叫顧問子代理</span></div>
+              <div><span class="adv-step-title">◆ 連續失敗兩次</span><br>升級根因分析與審查</div>
+              <div><span class="adv-step-title">◆ 交付終審關卡</span><br>核對 diff 與驗證證據</div>
+            </div>
+          </div>
+          <div class="advisor-foot">
+            <div class="kv-mini"><span>調用次數</span><b id="astraCalls">0 次</b></div>
+            <div class="kv-mini"><span>工具呼叫</span><b id="astraTools">0 次</b></div>
+            <div class="kv-mini"><span>運行時間</span><b id="astraTime" data-live-start="0" data-base-ms="0">00:00</b></div>
+            <div class="kv-mini"><span>完成度</span><b id="astraPct">—</b></div>
+            <div class="tickmarks" id="astraTicks"><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="kv-mini"><span>狀態</span><b id="astraState">未啟用</b></div>
+          </div>
+        </div>
+
+        <!-- Right Main Data-Flow Stack -->
+        <div class="right-stack">
+          <!-- Row 1: Main Model + Runtime/Usage -->
+          <div class="top-row">
+            <div class="tbox main-box" id="nodeMain" data-accent="sol" data-illum="unused" tabindex="0" role="button" aria-label="主模型運作詳情">
+              <div>
+                <div class="main-title" id="mainTitle">等待工作階段</div>
+                <div class="main-sub" id="mainSub">主模型 · 待命中</div>
+              </div>
+              <div class="main-activity" id="mainActivity">[ 等待讀取本機 Codex 狀態 ]</div>
+              <div>
+                <div class="main-progress-row">
+                  <div class="tprog" id="mainProg" data-state="idle" style="--bar-color:var(--purple);--bar-glow:rgba(177,154,254,.65)"><i id="mainProgFill"></i></div>
+                  <b id="mainPct">0%</b>
+                </div>
+                <div class="main-metrics-inline">
+                  <span>調用 <b id="mainInv">0</b></span>
+                  <span>回合 <b id="mainTurns">0/0</b></span>
+                  <span>耗時 <b id="mainElapsed" data-live-start="0" data-base-ms="0">00:00</b></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="tbox usage-box" id="nodeUsage" data-accent="gold" data-illum="unused" tabindex="0" role="button" aria-label="執行狀態與資源詳情">
+              <div class="usage-title"><span>RUNTIME</span><span id="usageModeTag" style="font-size:10px;color:var(--text-2)">IDLE</span></div>
+              <div>
+                <div class="kv-mini"><span>完成度</span><b id="uPct">0%</b></div>
+                <div class="kv-mini"><span id="uCallsLabel">對話調用</span><b id="uCalls">0 次</b></div>
+                <div class="kv-mini"><span id="uTimeLabel">累計時間</span><b id="uTotalTime">00:00</b></div>
+                <div class="kv-mini"><span id="uTokLabel">Token</span><b id="uTokens">—</b></div>
+              </div>
+              <div class="usage-pill" id="uStatusPill">待機中</div>
+            </div>
+          </div>
+
+          <!-- Row 2: Green Capabilities / Fork Layer -->
+          <div class="tbox router-box" id="nodeRouter" data-accent="green" data-illum="unused" tabindex="0" role="button" aria-label="功能與調度層詳情">
+            <div class="router-head">
+              <div class="router-title">功能與調度層 · fork layer <span id="routerSpin">[ · ]</span></div>
+              <div class="router-counter" id="routerCount">000</div>
+            </div>
+            <div class="cap-rows" id="capRows"></div>
+            <div class="router-foot">
+              <span id="routerFootL">工具運行 → 即時高亮活躍模組</span>
+              <span id="routerFootR">單模型模式</span>
+            </div>
+          </div>
+
+          <!-- Row 3: Dynamic Subagents Worker Row -->
+          <div class="workers-section" id="workersSection">
+            <div class="branch-tag" id="branchTag" data-running="false">委派子代理 · <strong id="branchStrong">尚未派發</strong></div>
+            <div class="workers-grid" id="workersGrid"></div>
+          </div>
+
+          <div class="single-note" id="singleNote" hidden>單模型獨立運行中 · 尚未派發任何 Subagent（已隱藏待機子代理區塊）</div>
+
+          <!-- Row 4: Return to Main + Tilted Stamp -->
+          <div class="return-row" id="returnRow">
+            <div class="tbox return-box" id="nodeReturn" data-accent="sol" data-illum="unused" tabindex="0" role="button" aria-label="主代理整合交接詳情">
+              <div class="return-title" id="returnTitle">back to 主模型</div>
+              <div class="return-sub" id="returnSub">等待子代理交付成果</div>
+            </div>
+            <div class="stamp" id="stamp" data-visible="false">ASTRA CHECKED</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Session Log -->
+    <div class="log-wrap" id="logWrap" data-collapsed="false">
+      <span class="log-label" id="logToggle" role="button" tabindex="0">session log &nbsp;[ <span class="live-flag" id="logFlag">live ▮</span> ] · <span id="logCount">0</span></span>
+      <div class="events" id="events"></div>
+    </div>
+
+    <!-- Terminal Prompt Footer -->
+    <div class="footer">
+      <div class="cmd-line" id="cmdLine">
+        <span class="prompt">~/工作區 $</span> <span class="bin">codex</span> <span class="flag">--model</span> <span class="val" id="cmdModel">gpt-6.2-sol</span><span id="cmdExtra"></span><span class="cursor" id="cmdCursor"></span>
+      </div>
+      <div class="foot-bottom">
+        <div class="ticker-wrap">
+          <div class="stepline" id="stepLine"># [00/00] 等待工作階段狀態 ▮</div>
+          <div class="sq"><i></i><i></i><i></i><i></i></div>
+        </div>
+        <div class="brand" id="sourceBrand">資料來源：唯讀本機 Codex 狀態</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Detail Drawer -->
+<div class="drawer-bg" id="drawerBg"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="false" aria-label="節點詳細資料">
+  <button class="drawer-close" id="drawerClose" aria-label="關閉">×</button>
+  <h2 id="drawerTitle">節點詳情</h2>
+  <p id="drawerDesc"></p>
+  <div class="drawer-sec">即時監控指標</div>
+  <div id="drawerKvs"></div>
+  <div class="drawer-note">唯讀中繼資料監控：不讀取提示詞本文、工具參數、輸出內容或金鑰。</div>
+</aside>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const SPIN = ['|', '/', '-', '\\'];
+
+  let latestState = null;
+  let compactMode = false; // false = 完整 TUI 圖譜（未用熄滅）；true = 隱藏未用區塊
+  let activeScope = 'session'; // 'session'（對話）| 'turn'（輪次）
+  let detailTarget = null;
+  let spinIdx = 0;
+  let demoMode = 'single';
+  let demoTick = 0;
+
+  try {
+    const saved = window.localStorage?.getItem('codex_wf_scope');
+    if (saved === 'turn' || saved === 'session') activeScope = saved;
+  } catch {}
+
+  function syncScopeButtons(scope) {
+    const isTurn = scope === 'turn';
+    $('scopeSessionBtn').classList.toggle('active', !isTurn);
+    $('scopeSessionBtn').setAttribute('aria-pressed', String(!isTurn));
+    $('scopeTurnBtn').classList.toggle('active', isTurn);
+    $('scopeTurnBtn').setAttribute('aria-pressed', String(isTurn));
+  }
+  syncScopeButtons(activeScope);
+
+  function fmtDur(ms) {
+    const sec = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    const p = v => String(v).padStart(2, '0');
+    return h > 0 ? `${h}:${p(m)}:${p(s)}` : `${p(m)}:${p(s)}`;
+  }
+
+  function fmtCompactDur(ms) {
+    const v = Number(ms || 0);
+    if (!v || v < 0) return '—';
+    if (v < 1000) return `${Math.round(v)}ms`;
+    if (v < 60000) return `${(v / 1000).toFixed(1)}s`;
+    return fmtDur(v);
+  }
+
+  function fmtTok(n) {
+    const v = Number(n || 0);
+    if (!v) return '—';
+    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`;
+    if (v >= 1_000) return `${(v / 1_000).toFixed(1)}k`;
+    return String(v);
+  }
+
+  function fmtClock(ms) {
+    if (!ms) return '--:--:--';
+    return new Date(ms).toLocaleTimeString('en-GB', { hour12: false });
+  }
+
+  function effortGlyphs(effort = '') {
+    const e = String(effort || '').toLowerCase();
+    const map = { low: 1, medium: 2, high: 3, xhigh: 4, max: 5, ultra: 5 };
+    const n = map[e] || 0;
+    return n ? `${'▮'.repeat(n)} ${e}` : '';
+  }
+
+  function isAdvisorSubagent(sub) {
+    if (!sub) return false;
+    const r = String(sub.role || '').toLowerCase();
+    const p = String(sub.agent_path || '').toLowerCase();
+    const nm = String(sub.name || '').toLowerCase();
+    return r === 'advisor' || r === 'astra' || p.endsWith('/advisor') || nm.includes('advisor');
+  }
+
+  function splitSubagents(subagents) {
+    const list = Array.isArray(subagents) ? subagents : [];
+    const advisor = list.find(isAdvisorSubagent) || null;
+    const workers = list.filter(s => s !== advisor);
+    return { advisor, workers };
+  }
+
+  // Smooth 1s timer + ASCII spinner for active running elements
+  setInterval(() => {
+    const now = Date.now();
+    document.querySelectorAll('[data-live-start]').forEach(el => {
+      const st = Number(el.dataset.liveStart || 0);
+      const base = Number(el.dataset.baseMs || 0);
+      if (st > 0) el.textContent = fmtDur(Math.max(0, now - st) + base);
+    });
+    if (latestState && (latestState.primary?.is_running || (latestState.subagents || []).some(s => s.is_running))) {
+      spinIdx = (spinIdx + 1) % SPIN.length;
+      const ch = SPIN[spinIdx];
+      $('routerSpin').textContent = `[ ${ch} ]`;
+      const basePhase = $('mainActivity').dataset.basePhase;
+      if (basePhase) $('mainActivity').textContent = `[ ${basePhase} ${ch} ]`;
+    }
+  }, 500);
+
+  // ── Dynamic Orthogonal Manhattan SVG Wire Renderer ──────
+  function drawWires() {
+    const svg = $('wiresSvg');
+    const diagram = $('diagram');
+    if (!svg || !diagram) return;
+    const dr = diagram.getBoundingClientRect();
+    if (!dr.width || !dr.height) return;
+
+    svg.setAttribute('viewBox', `0 0 ${Math.round(dr.width)} ${Math.round(dr.height)}`);
+    svg.replaceChildren();
+
+    const NS = 'http://www.w3.org/2000/svg';
+    const defs = document.createElementNS(NS, 'defs');
+    const mkArrow = (id, color) => {
+      const m = document.createElementNS(NS, 'marker');
+      m.setAttribute('id', id);
+      m.setAttribute('markerWidth', '6');
+      m.setAttribute('markerHeight', '6');
+      m.setAttribute('refX', '5');
+      m.setAttribute('refY', '3');
+      m.setAttribute('orient', 'auto');
+      const p = document.createElementNS(NS, 'path');
+      p.setAttribute('d', 'M0 0 L6 3 L0 6 Z');
+      p.setAttribute('fill', color);
+      m.appendChild(p);
+      defs.appendChild(m);
+    };
+    mkArrow('arrGold', '#f5bd4f');
+    mkArrow('arrPurple', '#b19afe');
+    mkArrow('arrCyan', '#75d8ff');
+    mkArrow('arrDim', '#3a3456');
+    svg.appendChild(defs);
+
+    const rectOf = el => {
+      if (!el || el.hidden || el.offsetParent === null) return null;
+      const r = el.getBoundingClientRect();
+      return {
+        l: r.left - dr.left,
+        r: r.right - dr.left,
+        t: r.top - dr.top,
+        b: r.bottom - dr.top,
+        cx: (r.left + r.right) / 2 - dr.left,
+        cy: (r.top + r.bottom) / 2 - dr.top,
+      };
+    };
+
+    const addPath = (d, cls, markerEnd) => {
+      const p = document.createElementNS(NS, 'path');
+      p.setAttribute('d', d);
+      p.setAttribute('class', cls);
+      if (markerEnd) p.setAttribute('marker-end', `url(#${markerEnd})`);
+      svg.appendChild(p);
+    };
+
+    const addParticle = (d, colorCls, dur = '1.6s') => {
+      const c = document.createElementNS(NS, 'circle');
+      c.setAttribute('r', '2.8');
+      c.setAttribute('class', `w-dot ${colorCls}`);
+      const am = document.createElementNS(NS, 'animateMotion');
+      am.setAttribute('dur', dur);
+      am.setAttribute('repeatCount', 'indefinite');
+      am.setAttribute('path', d);
+      c.appendChild(am);
+      svg.appendChild(c);
+    };
+
+    const p = latestState?.primary || {};
+    const { advisor, workers } = splitSubagents(latestState?.subagents || []);
+    const astraRunning = Boolean(advisor?.is_running || p.pending_permission);
+    const astraUsed = Boolean(advisor || p.pending_permission);
+    const mainRunning = Boolean(p.is_running);
+    const anyCapRunning = (latestState?.capabilities || []).some(c => c.is_running);
+    const anyWorkerRunning = workers.some(w => w.is_running);
+
+    const rAstra = rectOf($('nodeAstra'));
+    const rMain = rectOf($('nodeMain'));
+    const rRouter = rectOf($('nodeRouter'));
+    const rReturn = rectOf($('nodeReturn'));
+
+    // 1. ASTRA -> Main Model horizontal gold wire
+    if (rAstra && rMain) {
+      const y = Math.round(rMain.cy);
+      const d = `M${Math.round(rAstra.r)} ${y} H${Math.round(rMain.l - 3)}`;
+      addPath(d, `w-base gold ${astraUsed ? '' : 'dim'}`, astraRunning ? 'arrGold' : 'arrDim');
+      if (astraRunning) {
+        addPath(d, 'w-flow gold', 'arrGold');
+        addParticle(d, 'gold', '1.4s');
+      }
+    }
+
+    // 2. ASTRA -> Return horizontal gold wire
+    if (rAstra && rReturn) {
+      const y = Math.round(rReturn.cy);
+      const d = `M${Math.round(rAstra.r)} ${y} H${Math.round(rReturn.l - 3)}`;
+      addPath(d, `w-base gold ${astraUsed ? '' : 'dim'}`, astraRunning ? 'arrGold' : 'arrDim');
+      if (astraRunning) {
+        addPath(d, 'w-flow gold', 'arrGold');
+        addParticle(d, 'gold', '1.8s');
+      }
+    }
+
+    // 3. Main Model -> Router vertical wire
+    if (rMain && rRouter) {
+      const x = Math.round(rMain.cx);
+      const d = `M${x} ${Math.round(rMain.b)} V${Math.round(rRouter.t - 3)}`;
+      const active = mainRunning && (anyCapRunning || anyWorkerRunning || p.tool_calls_in_flight > 0 || p.is_running);
+      addPath(d, `w-base purple ${active ? '' : 'dim'}`, active ? 'arrPurple' : 'arrDim');
+      if (active) {
+        addPath(d, 'w-flow purple', 'arrPurple');
+        addParticle(d, 'purple', '1.2s');
+      }
+    }
+
+    // 4. Router -> Workers & Workers -> Return wires
+    const workerCards = Array.from($('workersGrid').children);
+    const rBranch = rectOf($('branchTag'));
+    if (rRouter && workerCards.length > 0 && !$('workersSection').hidden) {
+      const firstRect = rectOf(workerCards[0]);
+      if (firstRect) {
+        const trunkX = Math.round(rRouter.cx);
+        const topEdge = rBranch ? rBranch.b : rRouter.b;
+        const busY = Math.round((topEdge + (firstRect.t - 12)) / 2);
+        const retBusY = rReturn ? Math.round((firstRect.b + rReturn.t) / 2) : 0;
+
+        workerCards.forEach(card => {
+          const wr = rectOf(card);
+          if (!wr) return;
+          const isRun = card.dataset.illum === 'running';
+          const isUsed = card.dataset.illum === 'used';
+          const wx = Math.round(wr.cx);
+          const dIn = `M${trunkX} ${Math.round(rRouter.b)} V${busY} H${wx} V${Math.round(wr.t - 3)}`;
+          addPath(dIn, `w-base blue ${isRun || isUsed ? '' : 'dim'}`, isRun ? 'arrCyan' : 'arrDim');
+          if (isRun) {
+            addPath(dIn, 'w-flow cyan', 'arrCyan');
+            addParticle(dIn, 'cyan', '1.7s');
+          }
+
+          if (rReturn && retBusY > wr.b) {
+            const rx = Math.round(rReturn.cx);
+            const dOut = `M${wx} ${Math.round(wr.b)} V${retBusY} H${rx} V${Math.round(rReturn.t - 3)}`;
+            const handoffActive = isUsed && mainRunning && !isRun;
+            addPath(dOut, `w-base blue ${isUsed || isRun ? '' : 'dim'}`, handoffActive ? 'arrPurple' : 'arrDim');
+            if (handoffActive) {
+              addPath(dOut, 'w-flow purple', 'arrPurple');
+              addParticle(dOut, 'purple', '2.0s');
+            }
+          }
+        });
+      }
+    }
+  }
+
+  let rafWire = 0;
+  function scheduleDrawWires() {
+    cancelAnimationFrame(rafWire);
+    rafWire = requestAnimationFrame(drawWires);
+  }
+  window.addEventListener('resize', scheduleDrawWires);
+  if (typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(scheduleDrawWires).observe($('diagram'));
+  }
+
+  function renderSessionSelect(sessions) {
+    const sel = $('sessionSelect');
+    if (!Array.isArray(sessions) || sessions.length === 0) {
+      sel.style.display = 'none';
+      return;
+    }
+    sel.style.display = 'inline-block';
+    const prev = sel.value || '__auto__';
+    const sig = sessions.map(s => `${s.session_id}:${s.is_running ? 1 : 0}:${s.subagent_count || 0}`).join('|');
+    if (sel.dataset.sig === sig && sel.options.length > 0) return;
+    sel.dataset.sig = sig;
+    sel.replaceChildren();
+
+    const autoOpt = document.createElement('option');
+    autoOpt.value = '__auto__';
+    autoOpt.textContent = '自動追蹤最新活躍';
+    sel.appendChild(autoOpt);
+
+    for (const s of sessions.slice(0, 14)) {
+      const opt = document.createElement('option');
+      opt.value = s.session_id;
+      const mark = s.is_running ? '●' : '○';
+      const subTxt = s.subagent_count > 0 ? ` +${s.subagent_count}子` : '';
+      opt.textContent = `${mark} ${s.model_display || s.model} (${s.session_id.slice(0, 6)})${subTxt}`;
+      sel.appendChild(opt);
+    }
+    sel.value = prev === '__auto__' || !sessions.some(s => s.session_id === prev) ? '__auto__' : prev;
+  }
+
+  function renderCapabilities(caps, totalCalls) {
+    const container = $('capRows');
+    container.replaceChildren();
+    const list = Array.isArray(caps) ? caps : [];
+    const used = list.filter(c => c.used);
+
+    // Show ONLY actually used capabilities (no fake idle rows); if none yet, show one quiet standby row.
+    if (used.length === 0) {
+      const row = document.createElement('div');
+      row.className = 'cap-row';
+      row.dataset.used = 'false';
+      row.innerHTML = '<span class="cap-row-name">尚無工具活動</span><div class="tprog" data-state="idle"><i style="width:0%"></i></div><span class="cap-row-count">0 次</span><span class="cap-row-dur">—</span><span class="cap-row-flag">待命</span>';
+      container.appendChild(row);
+      return;
+    }
+
+    const sorted = used.slice().sort((a, b) => {
+      if (a.is_running !== b.is_running) return a.is_running ? -1 : 1;
+      return (b.count || 0) - (a.count || 0);
+    });
+    const maxCount = Math.max(1, ...sorted.map(c => c.count || 0));
+
+    for (const cap of sorted.slice(0, 6)) {
+      const row = document.createElement('div');
+      row.className = 'cap-row';
+      row.dataset.running = String(Boolean(cap.is_running));
+      row.dataset.used = 'true';
+      row.tabIndex = 0;
+      row.setAttribute('role', 'button');
+
+      const name = document.createElement('span');
+      name.className = 'cap-row-name';
+      name.textContent = cap.servers?.length ? `${cap.label}(${cap.servers[0]})` : cap.label;
+
+      const prog = document.createElement('div');
+      prog.className = 'tprog';
+      prog.dataset.state = cap.is_running ? 'running' : (cap.state === 'failed' ? 'failed' : 'done');
+      prog.style.setProperty('--bar-color', cap.is_running ? 'var(--cyan)' : 'var(--green)');
+      prog.style.setProperty('--bar-glow', 'rgba(117,216,255,.55)');
+      const fill = document.createElement('i');
+      const ratio = cap.is_running ? Math.max(45, cap.completion_pct || 60) : Math.max(12, Math.round(((cap.count || 0) / maxCount) * 100));
+      fill.style.width = `${ratio}%`;
+      prog.appendChild(fill);
+
+      const cnt = document.createElement('span');
+      cnt.className = 'cap-row-count';
+      cnt.textContent = `${cap.count} 次`;
+
+      const dur = document.createElement('span');
+      dur.className = 'cap-row-dur';
+      dur.textContent = cap.duration_ms > 0 ? fmtCompactDur(cap.duration_ms) : (cap.is_running ? '執行中' : '—');
+
+      const flag = document.createElement('span');
+      flag.className = 'cap-row-flag';
+      flag.textContent = cap.is_running ? '運行中' : `${cap.completion_pct}%`;
+
+      row.append(name, prog, cnt, dur, flag);
+      const openFn = e => { e.stopPropagation(); openDrawer('cap', cap.id); };
+      row.addEventListener('click', openFn);
+      row.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openFn(e); } });
+      container.appendChild(row);
+    }
+  }
+
+  function renderWorkers(workers, hasAdvisor) {
+    const grid = $('workersGrid');
+    const section = $('workersSection');
+    const returnRow = $('returnRow');
+    const singleNote = $('singleNote');
+    grid.replaceChildren();
+
+    const anyWorkerRunning = workers.some(w => w.is_running);
+
+    if (workers.length === 0 && compactMode) {
+      section.hidden = true;
+      returnRow.hidden = !hasAdvisor;
+      singleNote.hidden = false;
+      return;
+    }
+
+    section.hidden = false;
+    returnRow.hidden = false;
+    singleNote.hidden = true;
+
+    if (workers.length === 0) {
+      grid.style.setProperty('--wcols', '3');
+      grid.dataset.count = '3';
+      $('branchTag').dataset.running = 'false';
+      $('branchStrong').textContent = '單模型運行中 · 未調用子代理';
+      const placeholders = [
+        { tag: '[01] search', name: '儲存庫探索', model: 'Luna · 未調用' },
+        { tag: '[02] grep', name: '符號與呼叫鏈', model: 'Luna · 未調用' },
+        { tag: '[03] audit', name: '獨立審查與測試', model: 'Terra · 未調用' },
+      ];
+      for (const ph of placeholders) {
+        const card = document.createElement('div');
+        card.className = 'tbox worker-box';
+        card.dataset.accent = 'cyan';
+        card.dataset.illum = 'unused';
+        card.innerHTML = `
+          <span class="worker-tag">${ph.tag}</span>
+          <div class="worker-name">${ph.name}</div>
+          <div class="worker-model">${ph.model}</div>
+          <div class="worker-prog-line"><div class="tprog" data-state="idle"><i style="width:0%"></i></div><span class="worker-pct">—</span></div>
+          <div class="worker-foot"><span>0 次</span><span>00:00</span></div>
+        `;
+        grid.appendChild(card);
+      }
+      return;
+    }
+
+    grid.style.setProperty('--wcols', String(workers.length));
+    grid.dataset.count = String(workers.length);
+    $('branchTag').dataset.running = String(anyWorkerRunning);
+    $('branchStrong').textContent = anyWorkerRunning
+      ? `${workers.filter(w => w.is_running).length} 個運行中 / 共 ${workers.length} 個子代理`
+      : `已調用 ${workers.length} 個子代理（目前均未運行）`;
+
+    workers.forEach((sub, idx) => {
+      const card = document.createElement('div');
+      card.className = 'tbox worker-box';
+      card.tabIndex = 0;
+      card.setAttribute('role', 'button');
+      card.dataset.accent = sub.family || 'luna';
+      card.dataset.illum = sub.is_running ? 'running' : 'used';
+      card.dataset.state = sub.state || 'done';
+
+      const tag = document.createElement('span');
+      tag.className = 'worker-tag';
+      const num = String(idx + 1).padStart(2, '0');
+      tag.textContent = `[${num}] ${sub.role || 'subagent'}`;
+
+      const name = document.createElement('div');
+      name.className = 'worker-name';
+      name.textContent = sub.name;
+
+      const model = document.createElement('div');
+      model.className = 'worker-model';
+      model.textContent = `${sub.model_display || sub.model}${sub.reasoning_effort ? ` · ${sub.reasoning_effort}` : ''}`;
+
+      const progLine = document.createElement('div');
+      progLine.className = 'worker-prog-line';
+      const tprog = document.createElement('div');
+      tprog.className = 'tprog';
+      tprog.dataset.state = sub.is_running ? 'running' : (sub.state === 'failed' ? 'failed' : 'done');
+      const fill = document.createElement('i');
+      fill.style.width = `${Math.max(sub.is_running ? 16 : 0, sub.completion_pct || 0)}%`;
+      tprog.appendChild(fill);
+      const pct = document.createElement('span');
+      pct.className = 'worker-pct';
+      pct.textContent = `${sub.completion_pct || 0}%`;
+      progLine.append(tprog, pct);
+
+      const foot = document.createElement('div');
+      foot.className = 'worker-foot';
+      const left = document.createElement('span');
+      if (sub.is_running) {
+        left.textContent = `${sub.invocations}次 · ${sub.tool_calls}工具`;
+      } else if (sub.state === 'failed') {
+        left.className = 'err';
+        left.textContent = `✕ 中止 · ${sub.invocations}次`;
+      } else {
+        left.className = 'ok';
+        left.textContent = `✓ ${sub.invocations}次 · ${sub.tool_calls}工具`;
+      }
+      const right = document.createElement('span');
+      if (sub.is_running && sub.current_turn_started_ms > 0) {
+        const base = Math.max(0, (sub.elapsed_ms || 0) - Math.max(0, Date.now() - sub.current_turn_started_ms));
+        right.dataset.liveStart = String(sub.current_turn_started_ms);
+        right.dataset.baseMs = String(base);
+      }
+      right.textContent = fmtDur(sub.elapsed_ms || 0);
+      foot.append(left, right);
+
+      card.append(tag, name, model, progLine, foot);
+      const openFn = () => openDrawer('sub', sub.id);
+      card.addEventListener('click', openFn);
+      card.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openFn(); } });
+      grid.appendChild(card);
+    });
+  }
+
+  function renderEvents(events, anyRunning) {
+    const list = $('events');
+    const items = Array.isArray(events) ? events : [];
+    $('logCount').textContent = String(items.length);
+    $('logFlag').textContent = anyRunning ? 'live ▮' : 'idle';
+    $('logFlag').style.color = anyRunning ? 'var(--green)' : 'var(--muted)';
+
+    const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 26;
+    list.replaceChildren();
+    if (items.length === 0) {
+      const e = document.createElement('div');
+      e.className = 'event';
+      e.innerHTML = '<span class="t">--:--:--</span><span class="w">system</span><span class="m">等待工作階段事件…</span><span class="d"></span>';
+      list.appendChild(e);
+      return;
+    }
+    for (const ev of items.slice(-40)) {
+      const row = document.createElement('div');
+      row.className = 'event';
+      const t = document.createElement('span'); t.className = 't'; t.textContent = fmtClock(ev.timestamp_ms);
+      const w = document.createElement('span'); w.className = `w ${ev.kind || ''}`; w.textContent = ev.actor || 'Codex';
+      const m = document.createElement('span'); m.className = 'm'; m.textContent = ev.label || ev.event_type || 'event';
+      const d = document.createElement('span'); d.className = 'd'; d.textContent = ev.duration_ms ? fmtCompactDur(ev.duration_ms) : '';
+      row.append(t, w, m, d);
+      list.appendChild(row);
+    }
+    if (atBottom) list.scrollTop = list.scrollHeight;
+  }
+
+  function renderDrawer() {
+    if (!detailTarget || !latestState) return;
+    const kvs = $('drawerKvs');
+    kvs.replaceChildren();
+    const add = (k, v) => {
+      const r = document.createElement('div');
+      r.className = 'dkv';
+      const s = document.createElement('span'); s.textContent = k;
+      const b = document.createElement('b'); b.textContent = String(v ?? '—');
+      r.append(s, b);
+      kvs.appendChild(r);
+    };
+
+    const p = latestState.primary || {};
+    const { advisor } = splitSubagents(latestState.subagents || []);
+
+    if (detailTarget.kind === 'main' || detailTarget.kind === 'usage' || detailTarget.kind === 'router' || detailTarget.kind === 'return') {
+      const isTurn = (latestState.scope || activeScope) === 'turn';
+      $('drawerTitle').textContent = `${p.display_name || p.model || 'Codex'} · 主工作流`;
+      $('drawerDesc').textContent = p.current_phase || '';
+      add('統計範圍', isTurn ? `當前輪次（第 ${p.turn_index || 1}/${p.session_turns_total || 1} 輪）` : `整個對話（共 ${p.session_turns_total || p.turns_total || 0} 輪）`);
+      add('模型 ID', p.model || '—');
+      add('推理強度', p.reasoning_effort || '預設');
+      add('目前狀態', p.is_running ? '運行中（發光）' : (p.state === 'done' ? '已完成（熄滅）' : '待機'));
+      add('完成度', `${p.completion_pct || 0}%`);
+      add('回合進度', isTurn ? `第 ${p.turn_index || 1} 輪（共 ${p.session_turns_total || 1} 輪）` : `${p.turns_completed || 0} / ${p.turns_total || 0}`);
+      add(isTurn ? '本輪調用次數' : '對話調用次數', `${p.invocations || 0} 次（工具 ${p.tool_calls_total || 0} 次）`);
+      add('本輪運行時間', fmtDur(p.current_turn_elapsed_ms || 0));
+      add('對話累計時間', fmtDur(p.session_total_runtime_ms ?? p.total_runtime_ms ?? 0));
+      add(isTurn ? '本輪 Token' : '對話 Token', fmtTok(p.tokens_used));
+      if (isTurn && p.session_tokens_used) add('對話累計 Token', fmtTok(p.session_tokens_used));
+      if (p.context_window_tokens) add('脈絡視窗', fmtTok(p.context_window_tokens));
+      add('工作階段 ID', latestState.active_session_id || '—');
+      if (latestState.active_turn_id) add('當前輪次 ID', latestState.active_turn_id);
+    } else if (detailTarget.kind === 'astra') {
+      $('drawerTitle').textContent = advisor ? `${advisor.name} · 顧問關卡` : 'ASTRA · 顧問關卡（未啟用）';
+      $('drawerDesc').textContent = advisor ? (advisor.current_activity || '') : '目前工作階段尚未觸發 advisor 或授權審核。';
+      add('狀態', advisor ? (advisor.is_running ? '審查運行中（發光）' : (advisor.state === 'done' ? '已審核完成' : advisor.state)) : '未啟用');
+      add('模型', advisor ? `${advisor.model_display} (${advisor.reasoning_effort || 'xhigh'})` : 'gpt-6.2-astra');
+      add('調用次數', `${advisor?.invocations || 0} 次`);
+      add('工具呼叫', `${advisor?.tool_calls || 0} 次`);
+      add('完成度', advisor ? `${advisor.completion_pct || 0}%` : '—');
+      add('運行時間', fmtDur(advisor?.elapsed_ms || 0));
+      add('Token 用量', fmtTok(advisor?.tokens_used));
+    } else if (detailTarget.kind === 'cap') {
+      const cap = (latestState.capabilities || []).find(c => c.id === detailTarget.id);
+      if (!cap) return;
+      $('drawerTitle').textContent = `功能模組 · ${cap.label}`;
+      $('drawerDesc').textContent = cap.desc || '';
+      add('狀態', cap.is_running ? '執行中（發光）' : (cap.used ? '已完成（熄滅）' : '未使用'));
+      add('完成度', `${cap.completion_pct || 0}%`);
+      add('調用次數', `${cap.count || 0} 次`);
+      add('成功 / 失敗 / 進行中', `${cap.completed_count || 0} / ${cap.failed_count || 0} / ${cap.in_flight || 0}`);
+      add('累計耗時', fmtCompactDur(cap.duration_ms));
+      add('平均耗時', fmtCompactDur(cap.avg_duration_ms));
+      if (cap.last_tool) add('最近工具', cap.last_tool);
+      if (cap.servers?.length) add('MCP 伺服器', cap.servers.join(', '));
+    } else if (detailTarget.kind === 'sub') {
+      const sub = (latestState.subagents || []).find(s => s.id === detailTarget.id);
+      if (!sub) return;
+      $('drawerTitle').textContent = `${sub.name} · ${sub.role_label || sub.role}`;
+      $('drawerDesc').textContent = sub.current_activity || '';
+      add('模型 / 推理', `${sub.model_display || sub.model}${sub.reasoning_effort ? ` (${sub.reasoning_effort})` : ''}`);
+      add('狀態', sub.is_running ? '運行中（發光）' : (sub.state === 'failed' ? '中止／失敗' : '已完成（熄滅）'));
+      add('完成度', `${sub.completion_pct || 0}%`);
+      add('調用次數', `${sub.invocations || 0} 次（回合 ${sub.completed_turns || 0}/${sub.total_turns || 0}）`);
+      add('工具呼叫', `${sub.tool_calls || 0} 次`);
+      add('運行時間', fmtDur(sub.elapsed_ms || 0));
+      add('Token 用量', fmtTok(sub.tokens_used));
+      if (sub.agent_path) add('代理路徑', sub.agent_path);
+      add('執行緒 ID', sub.id);
+    }
+  }
+
+  function openDrawer(kind, id) {
+    detailTarget = { kind, id };
+    renderDrawer();
+    $('drawerBg').classList.add('show');
+    $('drawer').classList.add('show');
+  }
+  function closeDrawer() {
+    detailTarget = null;
+    $('drawerBg').classList.remove('show');
+    $('drawer').classList.remove('show');
+  }
+
+  function renderState(payload) {
+    if (!payload || typeof payload !== 'object') return;
+    latestState = payload;
+
+    const p = payload.primary || {};
+    const subs = Array.isArray(payload.subagents) ? payload.subagents : [];
+    const caps = Array.isArray(payload.capabilities) ? payload.capabilities : [];
+    const { advisor, workers } = splitSubagents(subs);
+    const anySubRunning = subs.some(s => s.is_running);
+    const anyCapRunning = caps.some(c => c.is_running);
+    const anyRunning = Boolean(p.is_running || anySubRunning);
+    const hasData = Boolean(payload.summary?.has_data || p.turns_total > 0 || subs.length > 0);
+    const effectiveScope = payload.scope === 'turn' ? 'turn' : (payload.scope === 'session' ? 'session' : activeScope);
+    const isTurnScope = effectiveScope === 'turn';
+    syncScopeButtons(effectiveScope);
+
+    // Topbar status
+    const liveInd = $('liveInd');
+    liveInd.dataset.state = p.pending_permission ? 'waiting' : (anyRunning ? 'running' : 'idle');
+    $('modeText').textContent = p.pending_permission ? '等待授權' : (anyRunning ? '運行中' : (hasData ? '回合待機' : '等待中'));
+    $('winPath').textContent = `~/工作區 — ${(p.model || 'codex').toLowerCase()}${subs.length > 0 ? ` + ${subs.length} subagents` : ' (single)'}`;
+    renderSessionSelect(payload.sessions || []);
+
+    // Headline & Legend adapt to single vs multi-agent + scope
+    const hl = $('headline');
+    hl.replaceChildren();
+    const sp1 = document.createElement('span');
+    sp1.className = 'p';
+    sp1.textContent = `${p.display_name || 'CODEX'} ${p.is_running ? '運行中' : '待機'}`;
+    const sep = document.createTextNode('  ·  ');
+    const sp2 = document.createElement('span');
+    sp2.className = subs.length > 0 ? 'g' : 'gr';
+    sp2.textContent = subs.length > 0
+      ? (anySubRunning ? `子代理協作 (${subs.filter(s => s.is_running).length}/${subs.length} 活躍)` : `多代理工作流 (${subs.length} 子代理)`)
+      : '單模型專注模式';
+    hl.append(sp1, sep, sp2);
+
+    $('legendMain').textContent = `${p.display_name || '主模型'}${p.reasoning_effort ? ` (${p.reasoning_effort})` : ''}`;
+    const turnTag = (p.turn_index || payload.active_turn_index)
+      ? `第 ${p.turn_index || payload.active_turn_index}/${p.session_turns_total || payload.session_turns_total || 1} 輪`
+      : '當前輪次';
+    $('legendRight').textContent = isTurnScope
+      ? `輪次視圖 · ${turnTag}${payload.active_turn_id ? ` (${payload.active_turn_id.slice(0, 6)})` : ''}`
+      : `對話視圖 · SESSION ${(payload.active_session_id || '—').slice(0, 8)}`;
+
+    // Hide unused advisor column in compact mode
+    $('diagram').dataset.hideAdvisor = String(compactMode && !advisor && !p.pending_permission);
+
+    // 1. Left ASTRA Advisor Column
+    const astraEl = $('nodeAstra');
+    const astraRunning = Boolean(advisor?.is_running || p.pending_permission);
+    const astraUsed = Boolean(advisor || p.pending_permission);
+    astraEl.dataset.illum = astraRunning ? 'running' : (astraUsed ? 'used' : 'unused');
+    $('astraTitle').textContent = advisor?.name ? advisor.name.toUpperCase() : 'ASTRA';
+    $('astraSub').textContent = advisor
+      ? `${advisor.role || 'advisor'} · ${advisor.model}${advisor.reasoning_effort ? ` (${advisor.reasoning_effort})` : ''}`
+      : 'advisor · gpt-6.2-astra';
+    $('astraBanner').textContent = p.pending_permission
+      ? '▸ 等待權限授權審核'
+      : (advisor?.is_running
+          ? '▸ advisor 審查運行中'
+          : (advisor ? `▸ 已審核 · ${advisor.invocations} 次介入` : '▸ 未觸發 · 待命'));
+    $('astraQuote').textContent = advisor
+      ? `» ${advisor.current_activity || '已完成審查'}`
+      : '» 尚未呼叫顧問子代理';
+    $('astraCalls').textContent = `${advisor?.invocations || 0} 次`;
+    $('astraTools').textContent = `${advisor?.tool_calls || 0} 次`;
+    $('astraPct').textContent = advisor ? `${advisor.completion_pct || 0}%` : '—';
+    $('astraState').textContent = p.pending_permission ? '待授權' : (advisor?.is_running ? '審查中' : (advisor ? '已審核' : '未啟用'));
+
+    const aTime = $('astraTime');
+    if (advisor?.is_running && advisor.current_turn_started_ms > 0) {
+      const base = Math.max(0, (advisor.elapsed_ms || 0) - Math.max(0, Date.now() - advisor.current_turn_started_ms));
+      aTime.dataset.liveStart = String(advisor.current_turn_started_ms);
+      aTime.dataset.baseMs = String(base);
+    } else {
+      aTime.dataset.liveStart = '0';
+      aTime.dataset.baseMs = '0';
+    }
+    aTime.textContent = fmtDur(advisor?.elapsed_ms || 0);
+    const ticks = $('astraTicks').querySelectorAll('i');
+    const onCount = Math.min(ticks.length, advisor?.invocations || 0);
+    ticks.forEach((el, i) => el.classList.toggle('on', i < onCount));
+
+    // 2. Top-Center Main Model Box
+    const mainEl = $('nodeMain');
+    mainEl.dataset.accent = p.family || 'sol';
+    mainEl.dataset.illum = p.is_running ? 'running' : (hasData ? 'used' : 'unused');
+    $('mainTitle').textContent = `${p.display_name || p.model || 'Codex'} · 主代理`;
+    const effTxt = effortGlyphs(p.reasoning_effort);
+    const subEl = $('mainSub');
+    subEl.replaceChildren();
+    subEl.appendChild(document.createTextNode(p.model || 'codex'));
+    if (effTxt) {
+      subEl.appendChild(document.createTextNode(' · effort '));
+      const eb = document.createElement('span');
+      eb.className = 'effort-bars';
+      eb.textContent = effTxt;
+      subEl.appendChild(eb);
+    }
+    const phaseClean = p.current_phase || '待機中';
+    $('mainActivity').dataset.basePhase = p.is_running ? phaseClean : '';
+    $('mainActivity').textContent = p.is_running ? `[ ${phaseClean} ${SPIN[spinIdx]} ]` : `[ ${phaseClean} ]`;
+
+    const pct = Math.max(0, Math.min(100, Number(p.completion_pct || 0)));
+    $('mainProg').dataset.state = p.is_running ? 'running' : (p.state === 'failed' ? 'failed' : (pct > 0 ? 'done' : 'idle'));
+    $('mainProgFill').style.width = `${pct}%`;
+    $('mainPct').textContent = `${pct}%`;
+    $('mainInv').textContent = `${p.invocations || 0}次`;
+    $('mainTurns').textContent = isTurnScope
+      ? `#${p.turn_index || 1}/${p.session_turns_total || 1}`
+      : `${p.turns_completed || 0}/${p.turns_total || 0}`;
+
+    const mTime = $('mainElapsed');
+    if (p.is_running && p.current_turn_started_ms > 0) {
+      mTime.dataset.liveStart = String(p.current_turn_started_ms);
+      mTime.dataset.baseMs = '0';
+      mTime.textContent = fmtDur(p.current_turn_elapsed_ms || (Date.now() - p.current_turn_started_ms));
+    } else {
+      mTime.dataset.liveStart = '0';
+      mTime.dataset.baseMs = '0';
+      mTime.textContent = fmtDur(p.current_turn_elapsed_ms || p.total_runtime_ms || 0);
+    }
+
+    // 3. Top-Right Usage / Runtime Gold Dashed Box
+    const usageEl = $('nodeUsage');
+    usageEl.dataset.illum = anyRunning ? 'running' : (hasData ? 'used' : 'unused');
+    $('usageModeTag').textContent = isTurnScope
+      ? (anyRunning ? 'TURN·LIVE' : 'TURN')
+      : (anyRunning ? 'SESS·LIVE' : 'SESSION');
+    $('uCallsLabel').textContent = isTurnScope ? '本輪調用' : '對話調用';
+    $('uTimeLabel').textContent = isTurnScope ? '本輪耗時' : '累計時間';
+    $('uTokLabel').textContent = isTurnScope ? '本輪 Token' : '對話 Token';
+    $('uPct').textContent = `${pct}%`;
+    $('uCalls').textContent = `${payload.summary?.total_invocations ?? p.invocations ?? 0} 次`;
+    $('uTotalTime').textContent = fmtDur(p.total_runtime_ms || 0);
+    $('uTokens').textContent = fmtTok(p.tokens_used);
+    $('uStatusPill').textContent = p.pending_permission
+      ? '等待授權確認'
+      : (anyRunning ? (anySubRunning ? `多代理協作 (${subs.filter(s => s.is_running).length} 運行)` : '主模型運行中') : (hasData ? '回合已完成' : '待機中'));
+
+    // 4. Middle Green Capabilities / Fork Layer
+    const routerEl = $('nodeRouter');
+    const routerActive = Boolean(anyCapRunning || anySubRunning || p.tool_calls_in_flight > 0);
+    const routerUsed = caps.some(c => c.used) || subs.length > 0;
+    routerEl.dataset.illum = routerActive ? 'running' : (routerUsed ? 'used' : 'unused');
+    if (!routerActive) $('routerSpin').textContent = '[ · ]';
+    $('routerCount').textContent = String(p.tool_calls_total || 0).padStart(3, '0');
+    renderCapabilities(caps, p.tool_calls_total || 0);
+    $('routerFootL').textContent = anyCapRunning
+      ? `正在執行：${caps.filter(c => c.is_running).map(c => c.label).join('、')}`
+      : (routerUsed ? `本階段共啟用 ${caps.filter(c => c.used).length} 項功能` : '尚無功能調用');
+    $('routerFootR').textContent = subs.length > 0 ? `子代理已派發 ${subs.length} 個` : '單模型模式 · 無子代理';
+
+    // 5. Dynamic Subagents Worker Row
+    renderWorkers(workers, Boolean(advisor));
+
+    // 6. Return Node & Tilted ASTRA Stamp
+    const retEl = $('nodeReturn');
+    const doneSubs = subs.filter(s => s.state === 'done').length;
+    const retActive = Boolean(p.is_running && doneSubs > 0 && !anySubRunning && subs.length > 0);
+    retEl.dataset.accent = p.family || 'sol';
+    retEl.dataset.illum = retActive ? 'running' : (doneSubs > 0 ? 'used' : 'unused');
+    $('returnTitle').textContent = `back to ${p.display_name || '主模型'}`;
+    $('returnSub').textContent = subs.length > 0
+      ? `已完成交回 ${doneSubs}/${subs.length} 個子代理成果`
+      : '單模型模式 · 無需子代理交接';
+    $('stamp').dataset.visible = String(Boolean(advisor && advisor.state === 'done'));
+    $('stamp').textContent = `${(advisor?.name || 'ASTRA').toUpperCase()} CHECKED`;
+
+    // 7. Session Log & Terminal Footer
+    renderEvents(payload.events || [], anyRunning);
+
+    $('cmdModel').textContent = p.model || 'gpt-6.2-sol';
+    const extraParts = [];
+    if (p.reasoning_effort) extraParts.push(` --effort ${p.reasoning_effort}`);
+    if (subs.length > 0) extraParts.push(` --subagents ${subs.length}`);
+    if (advisor) extraParts.push(` --advisor ${advisor.role || 'advisor'}`);
+    $('cmdExtra').textContent = extraParts.join('');
+    $('cmdCursor').classList.toggle('blink', anyRunning);
+
+    const turnIdx = String(isTurnScope ? (p.turn_index || 1) : (p.turns_completed || 0)).padStart(2, '0');
+    const turnAll = String(p.session_turns_total || p.turns_total || 0).padStart(2, '0');
+    const scopePrefix = isTurnScope ? '本輪' : '對話';
+    $('stepLine').textContent = `# [${scopePrefix} ${turnIdx}/${turnAll}] ${p.display_name || 'Codex'} · ${phaseClean} ${anyRunning ? '▮' : '✓'}`;
+
+    const srcMap = {
+      'codex-sqlite': 'Codex 本機唯讀即時狀態',
+      'codex-sqlite+hooks': 'Codex 即時狀態 + Hooks',
+      'local-codex-hooks': '本機 Codex Hooks',
+      'demo': 'TUI 預覽示範資料',
+    };
+    $('sourceBrand').textContent = `${srcMap[payload.source] || 'Codex'} · ${fmtClock(payload.timestamp_ms || Date.now())}`;
+
+    if (detailTarget) renderDrawer();
+    scheduleDrawWires();
+  }
+
+  // Event bindings
+  const setScope = nextScope => {
+    activeScope = nextScope === 'turn' ? 'turn' : 'session';
+    syncScopeButtons(activeScope);
+    try { window.localStorage?.setItem('codex_wf_scope', activeScope); } catch {}
+    if (typeof window.selectWorkflowScope === 'function') {
+      window.selectWorkflowScope(activeScope);
+    } else if (!window.__CODEX_MONITOR_HOSTED__) {
+      runDemo();
+    }
+  };
+  $('scopeSessionBtn').addEventListener('click', () => setScope('session'));
+  $('scopeTurnBtn').addEventListener('click', () => setScope('turn'));
+
+  $('compactBtn').addEventListener('click', () => {
+    compactMode = !compactMode;
+    $('compactBtn').setAttribute('aria-pressed', String(compactMode));
+    $('compactBtn').textContent = compactMode ? '完整圖譜' : '精簡隱藏';
+    if (latestState) renderState(latestState);
+  });
+
+  $('refreshBtn').addEventListener('click', () => {
+    if (typeof window.requestRefreshWorkflow === 'function') window.requestRefreshWorkflow();
+    else if (!window.__CODEX_MONITOR_HOSTED__) runDemo();
+  });
+
+  $('sessionSelect').addEventListener('change', () => {
+    if (typeof window.selectWorkflowSession === 'function') {
+      window.selectWorkflowSession($('sessionSelect').value);
+    }
+  });
+
+  [
+    ['nodeAstra', 'astra'],
+    ['nodeMain', 'main'],
+    ['nodeUsage', 'usage'],
+    ['nodeRouter', 'router'],
+    ['nodeReturn', 'return'],
+  ].forEach(([elId, kind]) => {
+    const el = $(elId);
+    el.addEventListener('click', () => openDrawer(kind, kind));
+    el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDrawer(kind, kind); } });
+  });
+
+  const toggleLog = () => {
+    const w = $('logWrap');
+    w.dataset.collapsed = String(w.dataset.collapsed !== 'true');
+  };
+  $('logToggle').addEventListener('click', toggleLog);
+  $('logToggle').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleLog(); } });
+
+  $('drawerClose').addEventListener('click', closeDrawer);
+  $('drawerBg').addEventListener('click', closeDrawer);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
+
+  window.receiveWorkflowState = renderState;
+  window.receiveWorkflowEvents = renderState;
+
+  // ── Standalone Browser Preview Demo (disabled inside Codex Desktop) ──
+  function makeDemo(mode, step) {
+    const now = Date.now();
+    const isTurn = activeScope === 'turn';
+    const start = now - (36000 + step * 3000);
+    const baseCaps = [
+      { id: 'reasoning', label: '深度推理', accent: 'purple', desc: '模型深度推理步驟' },
+      { id: 'search', label: '搜尋與讀取', accent: 'cyan', desc: '檔案探索與符號搜尋' },
+      { id: 'shell', label: '終端指令', accent: 'blue', desc: '命令列執行與驗證' },
+      { id: 'edit', label: '檔案編修', accent: 'green', desc: '程式碼修改與補丁' },
+    ];
+    if (mode === 'single') {
+      const act = ['reasoning', 'edit', 'shell'][step % 3];
+      const usedIds = isTurn ? ['reasoning', act] : ['reasoning', 'search', 'shell', 'edit'];
+      return {
+        source: 'demo', scope: activeScope, active_turn_id: 'turn-02', active_turn_index: 2, session_turns_total: 2,
+        timestamp_ms: now, active_session_id: 'demo-single-sol', mode: 'single-model', sessions: [],
+        primary: {
+          model: 'gpt-6.2-sol', display_name: 'GPT-6.2-Sol', family: 'sol', reasoning_effort: 'xhigh',
+          state: 'running', is_running: true,
+          current_phase: act === 'reasoning' ? '正在執行：深度推理' : (act === 'edit' ? '正在編修檔案' : '正在執行終端指令'),
+          turns_total: isTurn ? 1 : 2, turns_completed: isTurn ? 0 : 1, turn_index: 2, session_turns_total: 2, turns_in_progress: 1,
+          tool_calls_total: isTurn ? 3 + step : 10 + step, tool_calls_completed: isTurn ? 2 + step : 9 + step, tool_calls_in_flight: act === 'reasoning' ? 0 : 1,
+          invocations: isTurn ? 4 + step : 12 + step, completion_pct: Math.min(92, 35 + step * 9),
+          current_turn_started_ms: start, current_turn_elapsed_ms: now - start,
+          total_runtime_ms: isTurn ? (now - start) : 82000 + (now - start),
+          session_total_runtime_ms: 82000 + (now - start),
+          tokens_used: isTurn ? 148000 + step * 12000 : 512000 + step * 18000,
+          session_tokens_used: 512000 + step * 18000,
+          context_window_tokens: 475000,
+        },
+        capabilities: baseCaps.map(c => {
+          const used = usedIds.includes(c.id);
+          return {
+            ...c, used, is_running: c.id === act, state: c.id === act ? 'running' : (used ? 'done' : 'idle'),
+            count: used ? (isTurn ? 2 : 3 + (c.id === 'reasoning' ? step : 1)) : 0, completed_count: used ? 2 : 0, failed_count: 0, in_flight: c.id === act ? 1 : 0,
+            duration_ms: used ? (isTurn ? 1900 : 4800) : 0, avg_duration_ms: used ? 1200 : null, completion_pct: c.id === act ? 62 : (used ? 100 : 0), servers: [],
+          };
+        }),
+        subagents: [],
+        events: [
+          { timestamp_ms: now - 14000, actor: 'GPT-6.2-Sol', kind: 'sol', label: '讀取／查詢工作區檔案', duration_ms: 340 },
+          { timestamp_ms: now - 6000, actor: 'GPT-6.2-Sol', kind: 'sol', label: '編修工作區檔案', duration_ms: 120 },
+          { timestamp_ms: now - 1500, actor: 'GPT-6.2-Sol', kind: 'sol', label: '執行終端指令', duration_ms: 1450 },
+        ],
+        summary: { has_data: true, total_invocations: isTurn ? 4 + step : 12 + step },
+      };
+    }
+    if (mode === 'multi') {
+      const ph = step % 3; // 0: Luna Search running; 1: Terra Audit running; 2: Astra Advisor running
+      const allSubs = [
+        {
+          id: 'adv-1', name: 'Astra Advisor', role: 'advisor', role_label: '架構顧問', agent_path: '/root/advisor',
+          model: 'gpt-6.2-astra', model_display: 'GPT-6.2-Astra', family: 'astra', reasoning_effort: 'xhigh',
+          state: ph === 2 ? 'running' : 'done', is_running: ph === 2, invocations: isTurn ? 1 : 2, tool_calls: isTurn ? 3 : 6,
+          completed_turns: ph === 2 ? 0 : 1, total_turns: isTurn ? 1 : 2, completion_pct: ph === 2 ? 68 : 100,
+          elapsed_ms: isTurn ? 14000 : 31000, current_turn_started_ms: ph === 2 ? now - 11000 : 0, tokens_used: isTurn ? 190000 : 410000,
+          current_activity: ph === 2 ? '正在審核最終變更差異' : '已完成本輪架構審核',
+        },
+        {
+          id: 'sub-1', name: 'Luna Search', role: 'search', role_label: '快速探索', agent_path: '/root/search',
+          model: 'gpt-6-luna', model_display: 'GPT-6-Luna', family: 'luna', reasoning_effort: 'high',
+          state: ph === 0 ? 'running' : 'done', is_running: ph === 0, invocations: isTurn ? 1 : 2, tool_calls: isTurn ? 6 : 15,
+          completed_turns: ph === 0 ? 0 : 1, total_turns: isTurn ? 1 : 2, completion_pct: ph === 0 ? 64 : 100,
+          elapsed_ms: isTurn ? 9000 : 19000, current_turn_started_ms: ph === 0 ? now - 9000 : 0, tokens_used: isTurn ? 72000 : 180000,
+          current_activity: ph === 0 ? '執行工具：rg --files' : '已完成儲存庫盤點',
+        },
+        {
+          id: 'sub-2', name: 'Luna Grep', role: 'grep', role_label: '精準檢索', agent_path: '/root/grep',
+          model: 'gpt-6-luna', model_display: 'GPT-6-Luna', family: 'luna', reasoning_effort: 'high',
+          state: 'done', is_running: false, invocations: 1, tool_calls: 9,
+          completed_turns: 1, total_turns: 1, completion_pct: 100,
+          elapsed_ms: 12000, current_turn_started_ms: 0, tokens_used: 124000,
+          current_activity: '前輪已完成引用分析',
+        },
+        {
+          id: 'sub-3', name: 'Terra Audit', role: 'audit', role_label: '獨立審查', agent_path: '/root/audit',
+          model: 'gpt-6.1-terra', model_display: 'GPT-6.1-Terra', family: 'terra', reasoning_effort: 'high',
+          state: ph === 1 ? 'running' : 'done', is_running: ph === 1, invocations: 1, tool_calls: 11,
+          completed_turns: ph === 1 ? 0 : 1, total_turns: 1, completion_pct: ph === 1 ? 72 : 100,
+          elapsed_ms: 26000, current_turn_started_ms: ph === 1 ? now - 16000 : 0, tokens_used: 320000,
+          current_activity: ph === 1 ? '正在執行範圍測試與 diff 檢查' : '審查與測試通過',
+        },
+      ];
+      // In 'turn' demo scope, omit Luna Grep (from an earlier turn) to show real scope filtering
+      const subs = isTurn ? allSubs.filter(s => s.id !== 'sub-2') : allSubs;
+      return {
+        source: 'demo', scope: activeScope, active_turn_id: 'turn-04', active_turn_index: 4, session_turns_total: 4,
+        timestamp_ms: now, active_session_id: 'demo-multi-tui', mode: 'multi-agent', sessions: [],
+        primary: {
+          model: 'gpt-6.2-sol', display_name: 'GPT-6.2-Sol', family: 'sol', reasoning_effort: 'xhigh',
+          state: 'waiting_subagent', is_running: true,
+          current_phase: ph === 0 ? '子代理協作中：Luna Search' : (ph === 1 ? '子代理協作中：Terra Audit' : '等待 Astra Advisor 審核'),
+          turns_total: isTurn ? 1 : 4, turns_completed: isTurn ? 0 : 3, turn_index: 4, session_turns_total: 4, turns_in_progress: 1,
+          tool_calls_total: isTurn ? 9 : 28, tool_calls_completed: isTurn ? 9 : 28, tool_calls_in_flight: 0,
+          invocations: isTurn ? 10 : 32, completion_pct: ph === 0 ? 54 : (ph === 1 ? 78 : 90),
+          current_turn_started_ms: start, current_turn_elapsed_ms: now - start,
+          total_runtime_ms: isTurn ? (now - start) : 194000 + (now - start),
+          session_total_runtime_ms: 194000 + (now - start),
+          tokens_used: isTurn ? 520000 : 1840000,
+          session_tokens_used: 1840000,
+          context_window_tokens: 475000,
+        },
+        capabilities: baseCaps.map((c, idx) => {
+          const used = !isTurn || idx < 3;
+          return {
+            ...c, used, is_running: false, state: used ? 'done' : 'idle',
+            count: used ? (isTurn ? 3 : 7) : 0, completed_count: used ? (isTurn ? 3 : 7) : 0, failed_count: 0, in_flight: 0,
+            duration_ms: used ? (isTurn ? 3200 : 8400) : 0, avg_duration_ms: used ? 1100 : null, completion_pct: used ? 100 : 0, servers: [],
+          };
+        }),
+        subagents: subs,
+        events: [
+          { timestamp_ms: now - 18000, actor: 'GPT-6.2-Sol', kind: 'sol', label: '派發子代理：search / audit', duration_ms: null },
+          { timestamp_ms: now - 9000, actor: 'Luna Search', kind: 'luna', label: '讀取／查詢工作區檔案', duration_ms: 620 },
+          { timestamp_ms: now - 2000, actor: ph === 2 ? 'Astra Advisor' : 'Terra Audit', kind: ph === 2 ? 'astra' : 'terra', label: ph === 2 ? '完成一段深度推理' : '執行終端指令', duration_ms: 1840 },
+        ],
+        summary: { has_data: true, total_invocations: isTurn ? 13 : 38 },
+      };
+    }
+    return {
+      source: 'demo', scope: activeScope, active_turn_id: 'turn-02', active_turn_index: 2, session_turns_total: 2,
+      timestamp_ms: now, active_session_id: 'demo-idle', mode: 'single-model', sessions: [],
+      primary: {
+        model: 'gpt-6.2-sol', display_name: 'GPT-6.2-Sol', family: 'sol', reasoning_effort: 'xhigh',
+        state: 'done', is_running: false, current_phase: '回合已完成 · 待命中',
+        turns_total: isTurn ? 1 : 2, turns_completed: isTurn ? 1 : 2, turn_index: 2, session_turns_total: 2, turns_in_progress: 0,
+        tool_calls_total: isTurn ? 5 : 14, tool_calls_completed: isTurn ? 5 : 14, tool_calls_in_flight: 0,
+        invocations: isTurn ? 6 : 16, completion_pct: 100, current_turn_started_ms: 0, current_turn_elapsed_ms: 44000,
+        total_runtime_ms: isTurn ? 44000 : 98000, session_total_runtime_ms: 98000,
+        tokens_used: isTurn ? 210000 : 640000, session_tokens_used: 640000, context_window_tokens: 475000,
+      },
+      capabilities: baseCaps.slice(0, 3).map(c => ({
+        ...c, used: true, is_running: false, state: 'done', count: isTurn ? 2 : 4, completed_count: isTurn ? 2 : 4, failed_count: 0,
+        in_flight: 0, duration_ms: isTurn ? 2400 : 5200, avg_duration_ms: 1200, completion_pct: 100, servers: [],
+      })),
+      subagents: [],
+      events: [{ timestamp_ms: now - 40000, actor: 'GPT-6.2-Sol', kind: 'sol', label: '編修工作區檔案', duration_ms: 210 }],
+      summary: { has_data: true, total_invocations: isTurn ? 6 : 16 },
+    };
+  }
+
+  function runDemo() { renderState(makeDemo(demoMode, demoTick++)); }
+
+  if (!window.__CODEX_MONITOR_HOSTED__) {
+    $('demoBar').classList.add('show');
+    document.querySelectorAll('.demo-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        demoMode = btn.dataset.demo || 'single';
+        demoTick = 0;
+        document.querySelectorAll('.demo-btn').forEach(b => b.classList.toggle('active', b === btn));
+        runDemo();
+      });
+    });
+    runDemo();
+    setInterval(() => { if (demoMode !== 'idle') runDemo(); }, 2800);
+  }
+})();
+</script>
+</body>
+</html>

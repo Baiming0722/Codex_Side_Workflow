@@ -1,0 +1,20 @@
+{
+  "name": "codex-workflow-local",
+  "interface": {
+    "displayName": "個人 Codex 工具"
+  },
+  "plugins": [
+    {
+      "name": "codex-workflow-monitor",
+      "source": {
+        "source": "local",
+        "path": "./plugins/codex-workflow-monitor"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

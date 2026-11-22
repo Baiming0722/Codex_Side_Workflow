@@ -53,7 +53,9 @@ def classify_node_and_actor(event: str, agent_type: str, agent_id: str, model: s
 
     if at in ('advisor', 'astra') or (agent_id and 'astra' in md):
         return 'astra', 'Astra:advisor', 'gold', tool_cat
-    if at in ('search', 'explorer', 'pr_explorer'):
+    if at in ('explorer', 'pr_explorer'):
+        return 'search', 'Luna:explorer', 'cyan', tool_cat or 'search'
+    if at == 'search':
         return 'search', 'Luna:search', 'cyan', tool_cat or 'search'
     if at in ('grep', 'code_mapper'):
         return 'grep', 'Luna:grep', 'cyan', tool_cat or 'grep'

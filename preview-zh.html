@@ -1694,14 +1694,13 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
     singleNote.hidden = true;
 
     if (workers.length === 0) {
-      grid.style.setProperty('--wcols', '3');
-      grid.dataset.count = '3';
+      grid.style.setProperty('--wcols', '2');
+      grid.dataset.count = '2';
       $('branchTag').dataset.running = 'false';
       $('branchStrong').textContent = '單模型運行中 · 未調用子代理';
       const placeholders = [
-        { tag: '[01] search', name: '儲存庫探索', model: 'Luna · 未調用' },
-        { tag: '[02] grep', name: '符號與呼叫鏈', model: 'Luna · 未調用' },
-        { tag: '[03] audit', name: '獨立審查與測試', model: 'Terra · 未調用' },
+        { tag: '[01] explorer', name: '探索與呼叫鏈', model: 'Luna · 未調用' },
+        { tag: '[02] audit', name: '審查／測試／視覺', model: 'Terra · 未調用' },
       ];
       for (const ph of placeholders) {
         const card = document.createElement('div');
@@ -2323,7 +2322,7 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
       };
     }
     if (mode === 'multi') {
-      const ph = step % 3; // 0: Luna Search running; 1: Terra Audit running; 2: Astra Advisor running
+      const ph = step % 3; // 0: Luna Explorer running; 1: Terra Audit running; 2: Astra Advisor running
       const mkSub = (base, tok, rateRatio) => {
         const inp = Math.round(tok * 0.99);
         const cac = Math.round(inp * rateRatio);
@@ -2339,16 +2338,16 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
           current_activity: ph === 2 ? '正在審核最終變更差異' : '已完成本輪架構審核',
         }, isTurn ? 190000 : 410000, 0.724),
         mkSub({
-          id: 'sub-1', name: 'Luna Search', role: 'search', role_label: '快速探索', agent_path: '/root/search',
-          model: 'gpt-6-luna', model_display: 'GPT-6-Luna', family: 'luna', reasoning_effort: 'high',
+          id: 'sub-1', name: 'Luna Explorer', role: 'explorer', role_label: '探索與追蹤', agent_path: '/root/explorer',
+          model: 'gpt-6-luna', model_display: 'GPT-6-Luna', family: 'luna', reasoning_effort: 'medium',
           state: ph === 0 ? 'running' : 'done', is_running: ph === 0, invocations: isTurn ? 1 : 2, tool_calls: isTurn ? 6 : 15,
           completed_turns: ph === 0 ? 0 : 1, total_turns: isTurn ? 1 : 2, completion_pct: ph === 0 ? 64 : 100,
           elapsed_ms: isTurn ? 9000 : 19000, current_turn_started_ms: ph === 0 ? now - 9000 : 0,
-          current_activity: ph === 0 ? '執行工具：rg --files' : '已完成儲存庫盤點',
+          current_activity: ph === 0 ? '執行工具：codegraph / rg' : '已完成儲存庫盤點與呼叫鏈追蹤',
         }, isTurn ? 72000 : 180000, 0.874),
         mkSub({
-          id: 'sub-2', name: 'Luna Grep', role: 'grep', role_label: '精準檢索', agent_path: '/root/grep',
-          model: 'gpt-6-luna', model_display: 'GPT-6-Luna', family: 'luna', reasoning_effort: 'high',
+          id: 'sub-2', name: 'Luna Explorer #2', role: 'explorer', role_label: '前輪追蹤', agent_path: '/root/explorer_trace',
+          model: 'gpt-6-luna', model_display: 'GPT-6-Luna', family: 'luna', reasoning_effort: 'medium',
           state: 'done', is_running: false, invocations: 1, tool_calls: 9,
           completed_turns: 1, total_turns: 1, completion_pct: 100,
           elapsed_ms: 12000, current_turn_started_ms: 0,
@@ -2360,10 +2359,10 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
           state: ph === 1 ? 'running' : 'done', is_running: ph === 1, invocations: 1, tool_calls: 11,
           completed_turns: ph === 1 ? 0 : 1, total_turns: 1, completion_pct: ph === 1 ? 72 : 100,
           elapsed_ms: 26000, current_turn_started_ms: ph === 1 ? now - 16000 : 0,
-          current_activity: ph === 1 ? '正在執行範圍測試與 diff 檢查' : '審查與測試通過',
+          current_activity: ph === 1 ? '正在執行範圍測試與畫面驗收' : '審查與測試通過',
         }, 320000, 0.924),
       ];
-      // In 'turn' demo scope, omit Luna Grep (from an earlier turn) to show real scope filtering
+      // In 'turn' demo scope, omit Luna Explorer #2 (from an earlier turn) to show real scope filtering
       const subs = isTurn ? allSubs.filter(s => s.id !== 'sub-2') : allSubs;
       const pTok = isTurn ? 520000 : 1840000;
       const pIn = Math.round(pTok * 0.99);
@@ -2375,9 +2374,9 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
         source: 'demo', scope: activeScope, active_turn_id: 'turn-04', active_turn_index: 4, session_turns_total: 4,
         timestamp_ms: now, active_session_id: 'demo-multi-tui', mode: 'multi-agent', sessions: [],
         primary: {
-          model: 'gpt-6.2-sol', display_name: 'GPT-6.2-Sol', family: 'sol', reasoning_effort: 'xhigh',
+          model: 'gpt-6.2-sol', display_name: 'GPT-6.2-Sol', family: 'sol', reasoning_effort: 'high',
           state: 'waiting_subagent', is_running: true,
-          current_phase: ph === 0 ? '子代理協作中：Luna Search' : (ph === 1 ? '子代理協作中：Terra Audit' : '等待 Astra Advisor 審核'),
+          current_phase: ph === 0 ? '子代理協作中：Luna Explorer' : (ph === 1 ? '子代理協作中：Terra Audit' : '等待 Astra Advisor 審核'),
           turns_total: isTurn ? 1 : 4, turns_completed: isTurn ? 0 : 3, turn_index: 4, session_turns_total: 4, turns_in_progress: 1,
           tool_calls_total: isTurn ? 9 : 28, tool_calls_completed: isTurn ? 9 : 28, tool_calls_in_flight: 0,
           invocations: isTurn ? 10 : 32, completion_pct: ph === 0 ? 54 : (ph === 1 ? 78 : 90),
@@ -2399,8 +2398,8 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
         }),
         subagents: subs,
         events: [
-          { timestamp_ms: now - 18000, actor: 'GPT-6.2-Sol', kind: 'sol', label: '派發子代理：search / audit', duration_ms: null },
-          { timestamp_ms: now - 9000, actor: 'Luna Search', kind: 'luna', label: '讀取／查詢工作區檔案', duration_ms: 620 },
+          { timestamp_ms: now - 18000, actor: 'GPT-6.2-Sol', kind: 'sol', label: '派發子代理：explorer / audit', duration_ms: null },
+          { timestamp_ms: now - 9000, actor: 'Luna Explorer', kind: 'luna', label: '讀取／查詢工作區檔案', duration_ms: 620 },
           { timestamp_ms: now - 2000, actor: ph === 2 ? 'Astra Advisor' : 'Terra Audit', kind: ph === 2 ? 'astra' : 'terra', label: ph === 2 ? '完成一段深度推理' : '執行終端指令', duration_ms: 1840 },
         ],
         summary: {

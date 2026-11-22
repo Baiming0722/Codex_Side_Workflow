@@ -78,10 +78,12 @@ async function testSingleAndMultiAgentHookModes() {
     assert.equal(editCap.is_running, false, 'Completed edit capability must NOT glow');
     assert.equal(webCap.used, false, 'Unused web capability must stay unused (hidden by default)');
 
-    // Case B: Subagent spawned (Luna Search completed -> unlit, Terra Audit running -> glowing)
+    // Case B: Subagent spawned (Luna Explorer + legacy search completed -> unlit, Terra Audit running -> glowing)
     const multiEvents = [
       ...singleEvents,
       { timestamp_ms: now - 2500, event_type: 'PostToolUse', session_id: 'sess-single', model: 'gpt-6.2-sol', tool_name: 'exec', tool_use_id: 'cmd-1' },
+      { timestamp_ms: now - 2200, event_type: 'SubagentStart', session_id: 'sess-single', agent_id: 'ag-exp', agent_type: 'explorer', model: 'gpt-6-luna' },
+      { timestamp_ms: now - 1800, event_type: 'SubagentStop', session_id: 'sess-single', agent_id: 'ag-exp', agent_type: 'explorer', model: 'gpt-6-luna' },
       { timestamp_ms: now - 2000, event_type: 'SubagentStart', session_id: 'sess-single', agent_id: 'ag-1', agent_type: 'search', model: 'gpt-6-luna', who: 'Luna Search' },
       { timestamp_ms: now - 1200, event_type: 'SubagentStop', session_id: 'sess-single', agent_id: 'ag-1', agent_type: 'search', model: 'gpt-6-luna', who: 'Luna Search' },
       { timestamp_ms: now - 800, event_type: 'SubagentStart', session_id: 'sess-single', agent_id: 'ag-2', agent_type: 'audit', model: 'gpt-6.1-terra', who: 'Terra Audit' },
@@ -95,9 +97,12 @@ async function testSingleAndMultiAgentHookModes() {
     });
 
     assert.equal(multiRes.mode, 'multi-agent');
-    assert.equal(multiRes.subagents.length, 2);
+    assert.equal(multiRes.subagents.length, 3);
+    const explorerSub = multiRes.subagents.find(s => s.id === 'ag-exp');
     const searchSub = multiRes.subagents.find(s => s.id === 'ag-1');
     const auditSub = multiRes.subagents.find(s => s.id === 'ag-2');
+    assert.equal(explorerSub.family, 'luna', 'explorer role must map to luna family');
+    assert.equal(explorerSub.is_running, false, 'Stopped explorer must NOT glow');
     assert.equal(searchSub.is_running, false, 'Stopped subagent must NOT glow');
     assert.equal(searchSub.completion_pct, 100, 'Stopped subagent should be 100%');
     assert.equal(auditSub.is_running, true, 'Running subagent must glow');

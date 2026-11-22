@@ -90,7 +90,7 @@ export function inferModelFamily(model = '', role = '') {
   const r = String(role || '').toLowerCase();
   if (r === 'advisor' || r === 'astra' || m.includes('astra')) return 'astra';
   if (r === 'audit' || r === 'terra' || m.includes('terra')) return 'terra';
-  if (r === 'search' || r === 'grep' || m.includes('luna')) return 'luna';
+  if (r === 'explorer' || r === 'search' || r === 'grep' || m.includes('luna')) return 'luna';
   if (m.includes('sol')) return 'sol';
   if (m.includes('review')) return 'gold';
   return 'blue';
@@ -635,6 +635,7 @@ function extractSubagentLabel(threadRow) {
   if (threadRow.agent_nickname) return threadRow.agent_nickname;
   if (threadRow.agent_role) {
     const roleMap = {
+      explorer: 'Luna Explorer',
       search: 'Luna Search',
       grep: 'Luna Grep',
       audit: 'Terra Audit',
@@ -651,6 +652,7 @@ function extractSubagentLabel(threadRow) {
 
 function buildRoleLabel(role, agentPath) {
   const r = String(role || '').toLowerCase();
+  if (r === 'explorer') return '探索與追蹤 · explorer';
   if (r === 'search') return '快速探索 · search';
   if (r === 'grep') return '精準檢索 · grep';
   if (r === 'audit') return '獨立審查 · audit';
